@@ -27,6 +27,7 @@ dependencies = [
     "python-crontab>=3.2.0",
     "Brotli>=1.1.0",
     "cryptography>=42.0.4",
+    "watchdog>=3.0.0",
 ]
 keywords = [
     "sync",
@@ -58,7 +59,8 @@ test = [
 "Bug Tracker" = "https://github.com/jahwag/claudesync/issues"
 
 [project.scripts]
-claudesync = "claudesync.cli.main:cli"
+csync = "claudesync.cli.main:cli"
+claudesync-enhanced = "claudesync.cli.main:cli"
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]

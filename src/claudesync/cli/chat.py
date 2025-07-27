@@ -1,4 +1,7 @@
 import os
+import shutil
+import time
+from datetime import datetime
 
 import click
 import logging
@@ -16,12 +19,57 @@ def chat():
 
 
 @chat.command()
+@click.option('--dry-run', is_flag=True, help='Preview what will be downloaded without making changes')
+@click.option('--backup-existing', is_flag=True, help='Backup existing chat files before overwriting')
 @click.pass_obj
 @handle_errors
-def pull(config):
+def pull(config, dry_run, backup_existing):
     """Synchronize chats and their artifacts from the remote source."""
     provider = validate_and_get_provider(config, require_project=True)
+    
+    # Safety check
+    local_path = config.get("local_path")
+    chat_destination = os.path.join(local_path, "claude_chats")
+    
+    if os.path.exists(chat_destination) and os.listdir(chat_destination):
+        file_count = sum(len(files) for _, _, files in os.walk(chat_destination))
+        
+        if dry_run:
+            click.echo(f"⚠️  DRY RUN: Would download chats to existing directory with {file_count} files")
+            click.echo(f"   Location: {chat_destination}")
+            # Show what would be downloaded
+            organization_id = config.get("active_organization_id")
+            chats = provider.get_chat_conversations(organization_id)
+            click.echo(f"\n   Would download {len(chats)} chat(s):")
+            for chat in chats[:5]:  # Show first 5
+                click.echo(f"   - {chat.get('name', 'Unnamed')} ({chat['uuid']})")
+            if len(chats) > 5:
+                click.echo(f"   ... and {len(chats) - 5} more")
+            return
+        
+        click.echo(f"⚠️  Warning: Chat directory already exists with {file_count} files")
+        click.echo(f"   Location: {chat_destination}")
+        
+        if backup_existing:
+            # Create backup
+            backup_name = f"claude_chats_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            backup_path = os.path.join(local_path, backup_name)
+            click.echo(f"   Creating backup at: {backup_path}")
+            shutil.copytree(chat_destination, backup_path)
+            click.echo("   ✓ Backup created successfully")
+        else:
+            click.echo("\n   Options:")
+            click.echo("   - Use --backup-existing to create a backup before proceeding")
+            click.echo("   - Use --dry-run to preview without making changes")
+            
+            if not click.confirm("\n   Continue without backup?"):
+                click.echo("   Operation cancelled.")
+                return
+    
+    # Proceed with sync
+    click.echo("\nSyncing chats...")
     sync_chats(provider, config)
+    click.echo("✓ Chat synchronization complete")
 
 
 @chat.command()

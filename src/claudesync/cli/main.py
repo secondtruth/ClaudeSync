@@ -21,6 +21,10 @@ from .organization import organization
 from .project import project
 from .sync import schedule
 from .config import config
+from .conflict import conflict
+from .watch import watch
+from .workspace import workspace
+from claudesync.project_instructions import ProjectInstructions
 import logging
 
 logging.basicConfig(
@@ -170,6 +174,14 @@ def push(config, category, uberproject, dryrun):
         click.echo(
             f"Main project '{active_project_name}' synced successfully: https://claude.ai/project/{active_project_id}"
         )
+        
+        # Auto-sync project instructions if enabled
+        if config.get('auto_sync_instructions', True):
+            instructions = ProjectInstructions(local_path)
+            if instructions.is_enabled() and os.path.exists(os.path.join(local_path, instructions.INSTRUCTIONS_FILE)):
+                click.echo("\nSyncing project instructions...")
+                if instructions.push_instructions(provider, active_organization_id, active_project_id):
+                    click.echo("✓ Project instructions synced")
 
         # Always sync submodules to their respective projects
         for submodule in submodules:
@@ -252,6 +264,9 @@ cli.add_command(project)
 cli.add_command(schedule)
 cli.add_command(config)
 cli.add_command(chat)
+cli.add_command(conflict)
+cli.add_command(watch)
+cli.add_command(workspace)
 
 if __name__ == "__main__":
     cli()

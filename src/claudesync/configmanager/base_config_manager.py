@@ -36,8 +36,8 @@ class BaseConfigManager(ABC):
             "log_level": "INFO",
             "upload_delay": 0.5,
             "max_file_size": 32 * 1024,
-            "two_way_sync": False,
-            "prune_remote_files": True,
+            "two_way_sync": True,
+            "prune_remote_files": False,
             "claude_api_url": "https://claude.ai/api",
             "compression_algorithm": "none",
             "submodule_detect_filenames": [

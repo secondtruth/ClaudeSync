@@ -229,6 +229,19 @@ class BaseClaudeAIProvider(BaseProvider):
             "PUT", f"/organizations/{organization_id}/projects/{project_id}", data
         )
 
+    def get_project_details(self, organization_id, project_id):
+        """Get full project details including instructions."""
+        return self._make_request(
+            "GET", f"/organizations/{organization_id}/projects/{project_id}"
+        )
+
+    def update_project_instructions(self, organization_id, project_id, instructions):
+        """Update project instructions field."""
+        data = {"prompt_template": instructions}
+        return self._make_request(
+            "PUT", f"/organizations/{organization_id}/projects/{project_id}", data
+        )
+
     def create_project(self, organization_id, name, description=""):
         data = {"name": name, "description": description, "is_private": True}
         return self._make_request(

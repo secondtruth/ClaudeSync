@@ -11,3 +11,4 @@ crontab>=1.0.1
 python-crontab>=3.2.0
 Brotli>=1.1.0
 cryptography>=42.0.4
+watchdog>=3.0.0

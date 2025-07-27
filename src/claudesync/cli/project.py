@@ -9,6 +9,8 @@ from ..exceptions import ProviderError, ConfigurationError
 from .file import file
 from .submodule import submodule
 from ..syncmanager import retry_on_403
+from ..project_selector import ProjectSelector
+from ..project_instructions import ProjectInstructions
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +393,272 @@ def delete_files_from_project(provider, organization_id, project_id, project_nam
                 file_pbar.update(1)
     except ProviderError as e:
         click.echo(f"Error deleting files from project {project_name}: {str(e)}")
+
+
+@project.command()
+@click.option('--multiple', '-m', is_flag=True, help='Select multiple projects')
+@click.option('--include-archived', '-a', is_flag=True, help='Include archived projects')
+@click.option('--search', '-s', help='Filter projects by search term')
+@click.option('--sync-selected', is_flag=True, help='Sync selected projects immediately')
+@click.pass_obj
+@handle_errors
+def select(config, multiple, include_archived, search, sync_selected):
+    """Interactive project selection with filtering and actions."""
+    provider = validate_and_get_provider(config)
+    organization_id = config.get('active_organization_id')
+    
+    # Get all projects
+    all_projects = provider.get_projects(organization_id, include_archived=True)
+    
+    # Filter projects
+    filtered = ProjectSelector.filter_projects(
+        all_projects, 
+        search_term=search,
+        include_archived=include_archived
+    )
+    
+    if not filtered:
+        click.echo("No projects found matching criteria.")
+        return
+    
+    # Select projects
+    if multiple:
+        selected = ProjectSelector.select_multiple(
+            filtered,
+            prompt=f"Select projects to work with{' (filtered)' if search else ''}"
+        )
+    else:
+        selected_project = ProjectSelector.select_single(
+            filtered,
+            prompt=f"Select a project{' (filtered)' if search else ''}"
+        )
+        selected = [selected_project] if selected_project else []
+    
+    if not selected:
+        click.echo("No projects selected.")
+        return
+    
+    # Display selected
+    click.echo(f"\nSelected {len(selected)} project(s):")
+    for project in selected:
+        click.echo(f"  - {project['name']} (ID: {project['id']})")
+    
+    # Perform actions
+    if sync_selected and len(selected) > 1:
+        click.echo("\nSyncing selected projects...")
+        
+        import subprocess
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        def sync_project(project):
+            """Sync a single project."""
+            try:
+                # Find project directory
+                # This would need workspace management to work properly
+                # For now, we'll just show what would be synced
+                return {
+                    'project': project['name'],
+                    'status': 'would_sync',
+                    'message': 'Workspace management needed for multi-sync'
+                }
+            except Exception as e:
+                return {
+                    'project': project['name'],
+                    'status': 'error',
+                    'message': str(e)
+                }
+        
+        # Sync in parallel
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(sync_project, p): p for p in selected}
+            
+            for future in as_completed(futures):
+                result = future.result()
+                if result['status'] == 'success':
+                    click.echo(f"  ✓ {result['project']}")
+                else:
+                    click.echo(f"  ✗ {result['project']}: {result['message']}")
+    
+    elif sync_selected and len(selected) == 1:
+        # Set as active and offer to sync
+        project = selected[0]
+        config.set('active_project_id', project['id'], local=True)
+        config.set('active_project_name', project['name'], local=True)
+        click.echo(f"\nSet active project: {project['name']}")
+        
+        if click.confirm("Sync this project now?"):
+            subprocess.run(['claudesync', 'push'])
+
+
+@project.group()
+def instructions():
+    """Manage project instructions for AI context."""
+    pass
+
+@instructions.command()
+@click.option('--force', is_flag=True, help='Overwrite existing instructions file')
+@click.pass_obj
+@handle_errors
+def init(config, force):
+    """Initialize project instructions file."""
+    local_path = config.get('local_path')
+    if not local_path:
+        click.echo("No local path configured. Run 'claudesync project create' or 'set' first.")
+        return
+    
+    instructions = ProjectInstructions(local_path)
+    
+    if instructions.initialize(force=force):
+        click.echo(f"Created {instructions.INSTRUCTIONS_FILE} in {local_path}")
+        click.echo("\nEdit this file to provide context for AI assistants.")
+        click.echo("Use 'csync project instructions push' to sync to Claude.ai")
+    else:
+        click.echo(f"Project instructions file already exists: {instructions.INSTRUCTIONS_FILE}")
+        click.echo("Use --force to overwrite.")
+
+@instructions.command()
+@click.pass_obj
+@handle_errors
+def pull(config):
+    """Pull project instructions from Claude.ai."""
+    provider = validate_and_get_provider(config, require_project=True)
+    local_path = config.get('local_path')
+    organization_id = config.get('active_organization_id')
+    project_id = config.get('active_project_id')
+    
+    if not local_path:
+        click.echo("No local path configured.")
+        return
+    
+    instructions = ProjectInstructions(local_path)
+    
+    click.echo("Pulling project instructions from Claude.ai...")
+    if instructions.pull_instructions(provider, organization_id, project_id):
+        click.echo(f"✓ Instructions saved to {instructions.INSTRUCTIONS_FILE}")
+        
+        # Show preview
+        with open(os.path.join(local_path, instructions.INSTRUCTIONS_FILE), 'r') as f:
+            content = f.read()
+            if content.strip():
+                click.echo("\nPreview:")
+                preview = content[:200] + "..." if len(content) > 200 else content
+                click.echo(preview)
+            else:
+                click.echo("\n(No instructions found in project)")
+    else:
+        click.echo("✗ Failed to pull instructions")
+
+@instructions.command()
+@click.pass_obj
+@handle_errors
+def push(config):
+    """Push local instructions to Claude.ai project."""
+    provider = validate_and_get_provider(config, require_project=True)
+    local_path = config.get('local_path')
+    organization_id = config.get('active_organization_id')
+    project_id = config.get('active_project_id')
+    
+    if not local_path:
+        click.echo("No local path configured.")
+        return
+    
+    instructions = ProjectInstructions(local_path)
+    
+    if not os.path.exists(os.path.join(local_path, instructions.INSTRUCTIONS_FILE)):
+        click.echo(f"No {instructions.INSTRUCTIONS_FILE} found.")
+        click.echo("Run 'csync project instructions init' first.")
+        return
+    
+    click.echo("Pushing project instructions to Claude.ai...")
+    if instructions.push_instructions(provider, organization_id, project_id):
+        click.echo("✓ Instructions updated in Claude.ai project")
+    else:
+        click.echo("✗ Failed to push instructions")
+
+@instructions.command()
+@click.option('--direction', type=click.Choice(['pull', 'push', 'both']), default='both',
+              help='Sync direction')
+@click.pass_obj
+@handle_errors
+def sync(config, direction):
+    """Sync project instructions with Claude.ai."""
+    provider = validate_and_get_provider(config, require_project=True)
+    local_path = config.get('local_path')
+    organization_id = config.get('active_organization_id')
+    project_id = config.get('active_project_id')
+    
+    if not local_path:
+        click.echo("No local path configured.")
+        return
+    
+    instructions = ProjectInstructions(local_path)
+    
+    click.echo(f"Syncing project instructions ({direction})...")
+    results = instructions.sync_instructions(provider, organization_id, project_id, direction)
+    
+    if direction in ["pull", "both"] and results["pulled"]:
+        click.echo("✓ Pulled instructions from Claude.ai")
+    
+    if direction in ["push", "both"] and results["pushed"]:
+        click.echo("✓ Pushed instructions to Claude.ai")
+    
+    if not any(results.values()):
+        click.echo("✗ No instructions were synced")
+
+@instructions.command()
+@click.pass_obj
+@handle_errors
+def status(config):
+    """Show project instructions status."""
+    local_path = config.get('local_path')
+    if not local_path:
+        click.echo("No local path configured.")
+        return
+    
+    instructions = ProjectInstructions(local_path)
+    status = instructions.get_status()
+    
+    click.echo("Project Instructions Status")
+    click.echo("=" * 30)
+    click.echo(f"Enabled: {'Yes' if status['enabled'] else 'No'}")
+    click.echo(f"File: {status['path']}")
+    click.echo(f"Exists: {'Yes' if status['exists'] else 'No'}")
+    
+    if status['exists']:
+        click.echo(f"Size: {status['size']} bytes")
+        click.echo(f"Modified: {status['modified']}")
+        click.echo(f"Last synced: {status.get('last_synced', 'Never')}")
+    
+    if not status['enabled']:
+        click.echo("\nUse 'csync project instructions enable' to activate syncing.")
+
+@instructions.command()
+@click.pass_obj
+@handle_errors
+def enable(config):
+    """Enable project instructions syncing."""
+    local_path = config.get('local_path')
+    if not local_path:
+        click.echo("No local path configured.")
+        return
+    
+    instructions = ProjectInstructions(local_path)
+    instructions.enable()
+    click.echo("Project instructions syncing enabled.")
+
+@instructions.command()
+@click.pass_obj
+@handle_errors
+def disable(config):
+    """Disable project instructions syncing."""
+    local_path = config.get('local_path')
+    if not local_path:
+        click.echo("No local path configured.")
+        return
+    
+    instructions = ProjectInstructions(local_path)
+    instructions.disable()
+    click.echo("Project instructions syncing disabled.")
 
 
 project.add_command(submodule)

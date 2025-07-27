@@ -10,6 +10,7 @@ from tqdm import tqdm
 from claudesync.utils import compute_md5_hash
 from claudesync.exceptions import ProviderError
 from .compression import compress_content, decompress_content
+from .conflict_resolver import ConflictResolver
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,34 @@ class SyncManager:
             self._sync_without_compression(local_files, remote_files)
         else:
             self._sync_with_compression(local_files, remote_files)
+
+    def sync_with_conflicts(self, local_files, remote_files, handle_conflicts=True):
+        """Sync with conflict detection and resolution."""
+        if handle_conflicts:
+            resolver = ConflictResolver(self.config)
+            conflicts = resolver.detect_conflicts(local_files, remote_files)
+            
+            if conflicts:
+                import click
+                click.echo(f"\n⚠️  {len(conflicts)} conflict(s) detected!")
+                
+                # Get resolution strategy
+                strategy = self.config.get('conflict_resolution_strategy', 'prompt')
+                
+                if strategy == 'prompt':
+                    click.echo("Run 'claudesync conflict resolve' to handle conflicts.")
+                    if not click.confirm("Continue sync anyway?"):
+                        raise click.Abort()
+                else:
+                    click.echo(f"Auto-resolving conflicts using strategy: {strategy}")
+                    for conflict in conflicts:
+                        resolved = resolver.resolve_conflict(conflict, strategy)
+                        if resolved:
+                            with open(conflict['local_path'], 'w', encoding='utf-8') as f:
+                                f.write(resolved)
+        
+        # Continue with normal sync
+        self.sync(local_files, remote_files)
 
     def _sync_without_compression(self, local_files, remote_files):
         remote_files_to_delete = set(rf["file_name"] for rf in remote_files)
