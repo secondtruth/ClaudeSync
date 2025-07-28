@@ -562,6 +562,39 @@ def _get_project_status_info(project: ProjectInfo) -> str:
         return "❓ Status check failed"
 
 
+def _get_project_status(project: ProjectInfo) -> str:
+    """Get basic status information for a project."""
+    try:
+        config_file = project.path / ".claudesync" / "config.local.json"
+        if config_file.exists():
+            return "configured"
+        return "unconfigured"
+    except Exception:
+        return "unknown"
+
+
+def _project_has_conflicts(project: ProjectInfo) -> bool:
+    """Check if project has any conflict files."""
+    try:
+        conflicts_dir = project.path / ".claudesync" / "conflicts"
+        if conflicts_dir.exists():
+            return any(conflicts_dir.iterdir())
+        return False
+    except Exception:
+        return False
+
+
+def _project_has_chats(project: ProjectInfo) -> bool:
+    """Check if project has any chat files."""
+    try:
+        chats_dir = project.path / ".claudesync" / "chats"
+        if chats_dir.exists():
+            return any(chats_dir.iterdir())
+        return False
+    except Exception:
+        return False
+
+
 def _show_project_statistics(projects: List[ProjectInfo]):
     """Show statistics about the project list."""
     click.echo("📊 Project Statistics:")
