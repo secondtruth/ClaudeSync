@@ -70,9 +70,9 @@ class ClaudeSyncFileHandler(FileSystemEventHandler):
             logger.info(f"Syncing {len(self.modified_files)} modified files...")
             
             try:
-                # Run claudesync push
+                # Run csync push
                 result = subprocess.run(
-                    ['claudesync', 'push'],
+                    ['csync', 'push'],
                     cwd=self.project_path,
                     capture_output=True,
                     text=True

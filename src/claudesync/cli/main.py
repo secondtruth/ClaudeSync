@@ -20,11 +20,12 @@ from claudesync.utils import (
 from .auth import auth
 from .organization import organization
 from .project import project
-from .sync import schedule
+from .sync import sync, schedule
 from .config import config
 from .conflict import conflict
 from .watch import watch
 from .workspace import workspace
+from .pull import pull
 from claudesync.project_instructions import ProjectInstructions
 import logging
 
@@ -38,7 +39,9 @@ click_completion.init()
 @click.group()
 @click.pass_context
 def cli(ctx):
-    """ClaudeSync: Synchronize local files with AI projects."""
+    """ClaudeSync: Synchronize local files with AI projects.
+    
+    Use 'csync' to manage your Claude.ai projects from the command line."""
     if ctx.obj is None:
         ctx.obj = FileConfigManager()  # InMemoryConfigManager() for testing with mock
 
@@ -111,7 +114,9 @@ def upgrade(ctx):
 @click.pass_obj
 @handle_errors
 def push(config, category, uberproject, dryrun):
-    """Synchronize the project files, optionally including submodules in the parent project."""
+    """Push local files to Claude project (upload only).
+    
+    For bi-directional sync, use 'csync sync' instead."""
     provider = validate_and_get_provider(config, require_project=True)
 
     if not category:
@@ -171,9 +176,17 @@ def push(config, category, uberproject, dryrun):
             click.echo("Not sending files due to dry run mode.")
             return
 
+        # Disable two-way sync for push (upload only)
+        original_two_way = config.get("two_way_sync", False)
+        config.set("two_way_sync", False, local=True)
+        
         sync_manager.sync(local_files, remote_files)
+        
+        # Restore original setting
+        config.set("two_way_sync", original_two_way, local=True)
+        
         click.echo(
-            f"Main project '{active_project_name}' synced successfully: https://claude.ai/project/{active_project_id}"
+            f"Files pushed successfully to '{active_project_name}': https://claude.ai/project/{active_project_id}"
         )
         
         # Auto-sync project instructions if enabled
@@ -263,11 +276,13 @@ cli.add_command(auth)
 cli.add_command(organization)
 cli.add_command(project)
 cli.add_command(schedule)
+cli.add_command(sync)
 cli.add_command(config)
 cli.add_command(chat)
 cli.add_command(conflict)
 cli.add_command(watch)
 cli.add_command(workspace)
+cli.add_command(pull)
 
 if __name__ == "__main__":
     cli()

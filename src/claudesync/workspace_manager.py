@@ -53,6 +53,9 @@ class WorkspaceManager:
                             'id': project_config.get('active_project_id', 'Unknown'),
                             'relative_path': os.path.relpath(root, root_path)
                         })
+                        
+                        # Don't descend into this project directory
+                        dirs.clear()
                     except Exception:
                         # Invalid config, skip
                         pass
@@ -136,9 +139,9 @@ class WorkspaceManager:
         start_time = time.time()
         
         try:
-            # Run claudesync push
+            # Run csync push
             result = subprocess.run(
-                ['claudesync', 'push'],
+                ['csync', 'push'],
                 cwd=project['path'],
                 capture_output=True,
                 text=True,
@@ -205,7 +208,7 @@ class WorkspaceManager:
             
             for project in bar:
                 try:
-                    cmd = ['claudesync', 'chat', 'pull'] + safety_args
+                    cmd = ['csync', 'chat', 'pull'] + safety_args
                     result = subprocess.run(
                         cmd,
                         cwd=project['path'],

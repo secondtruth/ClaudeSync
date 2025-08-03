@@ -438,7 +438,7 @@ def _bulk_sync_projects(projects: List[ProjectInfo], category: str = None,
         
         try:
             # Build command
-            cmd = ["claudesync", "push"]
+            cmd = ["csync", "push"]
             
             if category:
                 cmd.extend(["--category", category])
@@ -496,7 +496,7 @@ def _bulk_chat_pull_projects(projects: List[ProjectInfo], dry_run: bool = False,
         
         try:
             # Build command
-            cmd = ["claudesync", "chat", "pull"]
+            cmd = ["csync", "chat", "pull"]
             
             if dry_run:
                 cmd.append("--dry-run")

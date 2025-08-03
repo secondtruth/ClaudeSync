@@ -11,6 +11,7 @@ from claudesync.utils import compute_md5_hash
 from claudesync.exceptions import ProviderError
 from .compression import compress_content, decompress_content
 from .conflict_resolver import ConflictResolver
+from .project_instructions import ProjectInstructions
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,13 @@ class SyncManager:
 
         with tqdm(total=len(local_files), desc="Local → Remote") as pbar:
             for local_file, local_checksum in local_files.items():
+                # Skip project instructions file - it should be handled separately
+                if local_file in ['project-instructions.md', '.projectinstructions']:
+                    self._handle_project_instructions(local_file)
+                    synced_files.add(local_file)
+                    pbar.update(1)
+                    continue
+                    
                 remote_file = next(
                     (rf for rf in remote_files if rf["file_name"] == local_file), None
                 )
@@ -148,6 +156,11 @@ class SyncManager:
     def _pack_files(self, local_files):
         packed_content = io.StringIO()
         for file_path, file_hash in local_files.items():
+            # Skip project instructions file - handle separately
+            if file_path in ['project-instructions.md', '.projectinstructions']:
+                self._handle_project_instructions(file_path)
+                continue
+                
             full_path = os.path.join(self.local_path, file_path)
             with open(full_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -209,6 +222,27 @@ class SyncManager:
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
+
+    def _handle_project_instructions(self, local_file):
+        """Handle project instructions file separately from regular file uploads."""
+        try:
+            instructions_handler = ProjectInstructions(self.local_path)
+            
+            # Push the instructions to the project (not as a file)
+            success = instructions_handler.push_instructions(
+                self.provider, 
+                self.active_organization_id, 
+                self.active_project_id
+            )
+            
+            if success:
+                logger.debug(f"Successfully updated project instructions from {local_file}")
+            else:
+                logger.warning(f"Failed to update project instructions from {local_file}")
+                
+        except Exception as e:
+            logger.error(f"Error handling project instructions: {e}")
+            # Don't raise - we don't want to break the entire sync
 
     def _cleanup_old_remote_files(self, remote_files):
         for remote_file in remote_files:
@@ -283,7 +317,15 @@ class SyncManager:
                     logger.debug(f"Updated timestamp on local file {local_file_path}")
 
     def sync_remote_to_local(self, remote_file, remote_files_to_delete, synced_files):
-        local_file_path = os.path.join(self.local_path, remote_file["file_name"])
+        # Handle special case for project instructions file
+        file_name = remote_file["file_name"]
+        if file_name == '.projectinstructions':
+            file_name = 'project-instructions.md'
+            # Update the remote_file dict to use the new name
+            remote_file = remote_file.copy()
+            remote_file["file_name"] = file_name
+        
+        local_file_path = os.path.join(self.local_path, file_name)
         if os.path.exists(local_file_path):
             self.update_existing_local_file(
                 local_file_path, remote_file, remote_files_to_delete, synced_files
@@ -316,8 +358,16 @@ class SyncManager:
     def create_new_local_file(
         self, local_file_path, remote_file, remote_files_to_delete, synced_files
     ):
+        # Handle special case for project instructions file
+        file_name = remote_file['file_name']
+        if file_name == '.projectinstructions':
+            # Rename to proper format
+            file_name = 'project-instructions.md'
+            local_file_path = os.path.join(os.path.dirname(local_file_path), file_name)
+            logger.debug(f"Renaming .projectinstructions to {file_name}")
+        
         logger.debug(
-            f"Creating new local file {remote_file['file_name']} from remote..."
+            f"Creating new local file {file_name} from remote..."
         )
         content = remote_file["content"]
         with tqdm(
@@ -336,6 +386,10 @@ class SyncManager:
             return
 
         for file_to_delete in list(remote_files_to_delete):
+            # Don't delete project instructions files that might exist as knowledge files
+            if file_to_delete in ['project-instructions.md', '.projectinstructions']:
+                logger.debug(f"Skipping deletion of {file_to_delete} (project instructions file)")
+                continue
             self.delete_remote_files(file_to_delete, remote_files)
 
     @retry_on_403()

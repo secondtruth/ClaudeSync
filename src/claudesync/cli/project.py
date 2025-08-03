@@ -487,7 +487,7 @@ def select(config, multiple, include_archived, search, sync_selected):
         click.echo(f"\nSet active project: {project['name']}")
         
         if click.confirm("Sync this project now?"):
-            subprocess.run(['claudesync', 'push'])
+            subprocess.run(['csync', 'push'])
 
 
 @project.group()

@@ -25,7 +25,7 @@ def start(config, daemon, startup_sync):
     # Perform startup sync if requested
     if startup_sync:
         click.echo("Performing initial sync...")
-        result = subprocess.run(['claudesync', 'push'], cwd=local_path)
+        result = subprocess.run(['csync', 'push'], cwd=local_path)
         if result.returncode != 0:
             click.echo("Initial sync failed. Aborting.")
             return
@@ -102,7 +102,7 @@ def sync_now(config):
         return
     
     click.echo("Triggering sync...")
-    result = subprocess.run(['claudesync', 'push'], cwd=local_path)
+    result = subprocess.run(['csync', 'push'], cwd=local_path)
     
     if result.returncode == 0:
         click.echo("Sync completed successfully.")

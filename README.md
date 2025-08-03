@@ -62,17 +62,17 @@ Ensure you have an SSH key for secure credential storage. Follow [GitHub's guide
 
 2. **Authenticate**
     ```shell
-    claudesync auth login
+    csync auth login
     ```
 
 3. **Create a Project**
     ```shell
-    claudesync project create
+    csync project create
     ```
 
 4. **Start Syncing***
     ```shell
-    claudesync push
+    csync push
     ```
     **This is a one-way sync. Files not present locally will be removed from the Claude.ai project unless pruning is [disabled](https://github.com/jahwag/ClaudeSync/wiki/Quick-reference#pruning-remote).*
 

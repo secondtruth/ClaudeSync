@@ -59,8 +59,8 @@ test = [
 "Bug Tracker" = "https://github.com/jahwag/claudesync/issues"
 
 [project.scripts]
+claudesync = "claudesync.cli.main:cli"
 csync = "claudesync.cli.main:cli"
-claudesync-enhanced = "claudesync.cli.main:cli"
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]
