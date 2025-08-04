@@ -53,6 +53,10 @@ test = [
     "pytest>=8.2.2",
     "pytest-cov>=5.0.0",
 ]
+gui = [
+    "customtkinter>=5.2.0",
+    "pillow>=10.0.0",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/jahwag/claudesync"
@@ -61,6 +65,7 @@ test = [
 [project.scripts]
 claudesync = "claudesync.cli.main:cli"
 csync = "claudesync.cli.main:cli"
+csync-gui = "claudesync.gui.main:launch"
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]
