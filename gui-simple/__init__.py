@@ -1,0 +1,1 @@
+# ClaudeSync Simple GUI Package

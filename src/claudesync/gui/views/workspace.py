@@ -169,7 +169,7 @@ class WorkspaceView:
             os.chdir(self.workspace_path)
             
             # Run workspace discover command
-            result = self.gui.run_csync_command(["workspace", "discover"])
+            result = self.gui.run_csync_command(["workspace", "discover"], show_in_terminal=False)
             
             os.chdir(original_dir)
             
@@ -291,7 +291,7 @@ class WorkspaceView:
             import os
             os.chdir(self.workspace_path)
             
-            result = self.gui.run_csync_command(["workspace", "clone"])
+            result = self.gui.run_csync_command(["workspace", "clone"], show_in_terminal=True)
             
             if result.returncode == 0:
                 # Count cloned projects

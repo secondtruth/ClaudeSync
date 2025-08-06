@@ -35,6 +35,10 @@ def login(ctx, provider, session_key, auto_approve):
     """Authenticate with an AI provider."""
     config = ctx.obj
     provider_instance = get_provider(config, provider)
+    
+    # Suggest quick auth if no session key provided
+    if not session_key:
+        click.echo("\n💡 Tip: Try 'csync auth quick' for easier authentication with a bookmarklet!\n")
 
     try:
         if session_key:
@@ -75,3 +79,93 @@ def ls(config):
             click.echo(f"  - {provider}")
     else:
         click.echo("No authenticated providers found.")
+
+
+@auth.command()
+@click.option('--browser', type=click.Choice(['playwright', 'selenium']), 
+              default='playwright', help='Browser automation method')
+@click.option('--headless', is_flag=True, help='Run browser in headless mode (playwright only)')
+@click.pass_context
+@handle_errors
+def browser_login(ctx, browser, headless):
+    """Authenticate using browser automation to grab session key."""
+    import datetime
+    from ..browser_auth import BrowserAuth
+    
+    click.echo(f"Starting browser automation with {browser}...")
+    
+    try:
+        if browser == 'selenium':
+            if headless:
+                click.echo("Warning: Selenium doesn't support headless mode for auth")
+            session_key = BrowserAuth.get_session_key_selenium()
+        else:
+            session_key = BrowserAuth.get_session_key_playwright(headless=headless)
+        
+        if session_key:
+            # Get expiry (30 days from now)
+            expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
+            
+            # Save session key
+            config = ctx.obj
+            provider_instance = get_provider(config, 'claude.ai')
+            config.set_session_key('claude.ai', session_key, expires)
+            
+            click.echo(f"✓ Successfully authenticated! Session key retrieved and stored.")
+            
+            # Test by getting organizations
+            try:
+                orgs = provider_instance.get_organizations()
+                if orgs:
+                    click.echo(f"✓ Verified access to {len(orgs)} organization(s)")
+            except Exception as e:
+                click.echo(f"⚠ Warning: Could not verify organizations: {e}")
+        else:
+            click.echo("Failed to retrieve session key from browser")
+            
+    except Exception as e:
+        click.echo(f"✗ Browser authentication failed: {str(e)}")
+        if not headless:
+            click.echo("\nFalling back to manual login...")
+            ctx.invoke(login)
+
+
+@auth.command()
+@click.pass_context
+@handle_errors
+def quick(ctx):
+    """Quick authentication using bookmarklet or console method (no browser automation needed)."""
+    from ..auth_helper import SimpleAuthHelper
+    
+    session_key = SimpleAuthHelper.quick_auth()
+    
+    if session_key:
+        # Get expiry (30 days from now)
+        expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
+        
+        # Save session key
+        config = ctx.obj
+        config.set_session_key('claude.ai', session_key, expires)
+        
+        click.echo(click.style("\n✓ Successfully authenticated with Claude.ai!", fg='green', bold=True))
+        
+        # Test by getting organizations
+        try:
+            provider = get_provider(config, 'claude.ai')
+            orgs = provider.get_organizations()
+            if orgs:
+                click.echo(f"✓ Verified access to {len(orgs)} organization(s)")
+                
+                # Offer to set organization
+                if len(orgs) == 1:
+                    org = orgs[0]
+                    if click.confirm(f"\nSet '{org['name']}' as active organization?"):
+                        config.set('active_organization_id', org['id'])
+                        config.set('active_organization_name', org['name'])
+                        click.echo(f"✓ Active organization set to: {org['name']}")
+                        
+        except Exception as e:
+            click.echo(f"⚠ Warning: Could not verify organizations: {e}")
+    else:
+        click.echo(click.style("\n✗ Authentication failed", fg='red'))
+        click.echo("Please try again or use 'csync auth login' for manual entry")

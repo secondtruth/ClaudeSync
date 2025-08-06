@@ -172,10 +172,18 @@ def push(config, category, uberproject, dryrun):
 
         if dryrun:
             for file in local_files.keys():
-                click.echo(f"Would send file: {file}")
+                try:
+                    click.echo(f"Would send file: {file}")
+                except UnicodeEncodeError:
+                    # Handle emoji/unicode in filenames on Windows
+                    safe_name = file.encode('utf-8', errors='replace').decode('utf-8')
+                    click.echo(f"Would send file: {safe_name}")
             click.echo("Not sending files due to dry run mode.")
             return
 
+        # Pull project instructions first (always bidirectional for instructions)
+        sync_manager._pull_project_instructions(remote_files)
+        
         # Disable two-way sync for push (upload only)
         original_two_way = config.get("two_way_sync", False)
         config.set("two_way_sync", False, local=True)

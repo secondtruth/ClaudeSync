@@ -95,6 +95,9 @@ class SyncManager:
     def _sync_without_compression(self, local_files, remote_files):
         remote_files_to_delete = set(rf["file_name"] for rf in remote_files)
         synced_files = set()
+        
+        # First, check for remote project instructions and pull if needed
+        self._pull_project_instructions(remote_files)
 
         with tqdm(total=len(local_files), desc="Local → Remote") as pbar:
             for local_file, local_checksum in local_files.items():
@@ -133,6 +136,9 @@ class SyncManager:
         self.prune_remote_files(remote_files, remote_files_to_delete)
 
     def _sync_with_compression(self, local_files, remote_files):
+        # First, check for remote project instructions and pull if needed
+        self._pull_project_instructions(remote_files)
+        
         packed_content = self._pack_files(local_files)
         compressed_content = compress_content(
             packed_content, self.compression_algorithm
@@ -242,6 +248,52 @@ class SyncManager:
                 
         except Exception as e:
             logger.error(f"Error handling project instructions: {e}")
+            # Don't raise - we don't want to break the entire sync
+    
+    def _pull_project_instructions(self, remote_files):
+        """Pull project instructions from remote if they exist."""
+        try:
+            # Look for project instructions in remote files
+            instructions_file = None
+            for rf in remote_files:
+                if rf["file_name"] in ['project-instructions.md', '.projectinstructions']:
+                    instructions_file = rf
+                    break
+            
+            if instructions_file:
+                local_instructions_path = os.path.join(self.local_path, 'project-instructions.md')
+                
+                # Check if local file exists and compare
+                should_pull = False
+                if not os.path.exists(local_instructions_path):
+                    should_pull = True
+                    logger.debug("No local project-instructions.md found, pulling from remote")
+                else:
+                    # Compare checksums
+                    with open(local_instructions_path, 'r', encoding='utf-8') as f:
+                        local_content = f.read()
+                    local_checksum = compute_md5_hash(local_content)
+                    remote_checksum = compute_md5_hash(instructions_file["content"])
+                    
+                    if local_checksum != remote_checksum:
+                        # For now, remote wins for instructions (could add conflict resolution later)
+                        should_pull = True
+                        logger.debug("Project instructions differ, pulling from remote")
+                
+                if should_pull:
+                    # Write remote content to local file
+                    with open(local_instructions_path, 'w', encoding='utf-8') as f:
+                        f.write(instructions_file["content"])
+                    logger.info(f"✓ Pulled project-instructions.md from remote")
+                    
+                    # If the remote file was .projectinstructions, we should delete it
+                    # and upload the renamed version
+                    if instructions_file["file_name"] == '.projectinstructions':
+                        logger.debug("Converting .projectinstructions to project-instructions.md")
+                        # The rename will happen on next push
+                        
+        except Exception as e:
+            logger.error(f"Error pulling project instructions: {e}")
             # Don't raise - we don't want to break the entire sync
 
     def _cleanup_old_remote_files(self, remote_files):

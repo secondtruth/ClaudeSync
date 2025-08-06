@@ -1,6 +1,6 @@
 [project]
 name = "claudesync"
-version = "0.7.3"
+version = "0.7.5"
 authors = [
     {name = "Jahziah Wagner", email = "540380+jahwag@users.noreply.github.com"},
 ]
@@ -28,6 +28,7 @@ dependencies = [
     "Brotli>=1.1.0",
     "cryptography>=42.0.4",
     "watchdog>=3.0.0",
+    "pyperclip>=1.8.2",
 ]
 keywords = [
     "sync",
@@ -56,6 +57,10 @@ test = [
 gui = [
     "customtkinter>=5.2.0",
     "pillow>=10.0.0",
+]
+browser = [
+    "playwright>=1.40.0",
+    "selenium>=4.0.0",
 ]
 
 [project.urls]

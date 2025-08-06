@@ -70,6 +70,9 @@ def pull(config, local_path, dry_run, force, merge):
     # Create a temporary sync manager for pull operations
     sync_manager = SyncManager(provider, config, local_path)
     
+    # Pull project instructions first (always pull these)
+    sync_manager._pull_project_instructions(remote_files)
+    
     # Temporarily enable two-way sync for pull
     original_two_way = config.get("two_way_sync", False)
     config.set("two_way_sync", True, local=True)

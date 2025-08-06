@@ -125,7 +125,7 @@ class ProjectsView:
         current_project_id = self.get_current_project()
         
         # Get projects list
-        result = self.gui.run_csync_command(["project", "ls"])
+        result = self.gui.run_csync_command(["project", "ls"], show_in_terminal=False)
         
         if result.returncode == 0:
             # Parse projects from output
@@ -280,7 +280,7 @@ class ProjectsView:
             if path and path != str(Path.cwd()):
                 cmd.extend(["--local-path", path])
             
-            result = self.gui.run_csync_command(cmd)
+            result = self.gui.run_csync_command(cmd, show_in_terminal=True)
             
             if result.returncode == 0:
                 self.gui.show_message("Success", f"Project '{name}' created successfully!")
@@ -317,7 +317,7 @@ class ProjectsView:
             import os
             os.chdir(directory)
             
-            result = self.gui.run_csync_command(["project", "set"])
+            result = self.gui.run_csync_command(["project", "set"], show_in_terminal=True)
             
             if result.returncode == 0:
                 self.gui.show_message("Success", f"Project '{project['name']}' set as active in {directory}")

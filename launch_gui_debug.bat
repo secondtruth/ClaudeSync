@@ -1,0 +1,3 @@
+@echo off
+echo Launching ClaudeSync GUI with enhanced error reporting...
+powershell -ExecutionPolicy Bypass -File "%~dp0launch_gui_debug.ps1"
