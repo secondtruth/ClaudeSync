@@ -1,12 +1,23 @@
 import click
 import json
 import os
+import sys
 from pathlib import Path
 from ..workspace_config import WorkspaceConfig
 from ..workspace_manager import WorkspaceManager
 from ..utils import handle_errors, validate_and_get_provider
 from ..syncmanager import SyncManager
 from ..configmanager import FileConfigManager
+
+# Fix Windows Unicode issues
+if sys.platform == "win32":
+    # Ensure UTF-8 encoding for Windows console
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+    # Set environment variable for child processes
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 @click.group()
 def workspace():
