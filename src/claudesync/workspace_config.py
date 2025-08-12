@@ -39,8 +39,8 @@ class WorkspaceConfig:
     def _save_config(self):
         """Save configuration to file."""
         os.makedirs(os.path.dirname(self.CONFIG_FILE), exist_ok=True)
-        with open(self.CONFIG_FILE, 'w') as f:
-            json.dump(self.config, f, indent=2)
+        with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(self.config, f, indent=2, ensure_ascii=False)
     
     def set_workspace_root(self, path: str):
         """Set the workspace root directory."""

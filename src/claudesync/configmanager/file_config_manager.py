@@ -6,6 +6,7 @@ import logging
 
 from claudesync.configmanager.base_config_manager import BaseConfigManager
 from claudesync.session_key_manager import SessionKeyManager
+from claudesync.dynamic_config import DynamicConfigManager
 
 
 class FileConfigManager(BaseConfigManager):
@@ -31,6 +32,9 @@ class FileConfigManager(BaseConfigManager):
         self.local_config = {}
         self.local_config_dir = None
         self._load_local_config()
+        
+        # Initialize dynamic config wrapper
+        self.dynamic = DynamicConfigManager(self)
 
     def _load_global_config(self):
         """
@@ -123,6 +127,7 @@ class FileConfigManager(BaseConfigManager):
         Retrieves a configuration value.
 
         Checks the local configuration first, then falls back to the global configuration.
+        For dynamic keys, uses the DynamicConfigManager to resolve at runtime.
 
         Args:
             key (str): The key for the configuration setting to retrieve.
@@ -131,6 +136,10 @@ class FileConfigManager(BaseConfigManager):
         Returns:
             The value of the configuration setting if found, otherwise the default value.
         """
+        # Use dynamic resolution for certain keys
+        if hasattr(self, 'dynamic') and key in ['local_path', 'active_project_name', 'active_organization_id']:
+            return self.dynamic.get(key, default)
+        
         return self.local_config.get(key) or self.global_config.get(key, default)
 
     def set(self, key, value, local=False):
@@ -162,8 +171,8 @@ class FileConfigManager(BaseConfigManager):
         This method writes the current state of the `global_config` attribute to the configuration file,
         pretty-printing the JSON for readability.
         """
-        with open(self.global_config_file, "w") as f:
-            json.dump(self.global_config, f, indent=2)
+        with open(self.global_config_file, "w", encoding="utf-8") as f:
+            json.dump(self.global_config, f, indent=2, ensure_ascii=False)
 
     def _save_local_config(self):
         """
@@ -174,8 +183,8 @@ class FileConfigManager(BaseConfigManager):
                 self.local_config_dir / ".claudesync" / "config.local.json"
             )
             local_config_file.parent.mkdir(exist_ok=True)
-            with open(local_config_file, "w") as f:
-                json.dump(self.local_config, f, indent=2)
+            with open(local_config_file, "w", encoding="utf-8") as f:
+                json.dump(self.local_config, f, indent=2, ensure_ascii=False)
 
     def set_session_key(self, provider, session_key, expiry):
         """
@@ -194,7 +203,7 @@ class FileConfigManager(BaseConfigManager):
 
             self.global_config_dir.mkdir(parents=True, exist_ok=True)
             provider_key_file = self.global_config_dir / f"{provider}.key"
-            with open(provider_key_file, "w") as f:
+            with open(provider_key_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "session_key": encrypted_session_key,
@@ -202,6 +211,7 @@ class FileConfigManager(BaseConfigManager):
                         "session_key_expiry": expiry.isoformat(),
                     },
                     f,
+                    ensure_ascii=False
                 )
         except RuntimeError as e:
             logging.error(f"Failed to encrypt session key: {str(e)}")

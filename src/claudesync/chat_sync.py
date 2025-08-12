@@ -25,13 +25,16 @@ def sync_chats(provider, config, sync_all=False):
     Raises:
         ConfigurationError: If required configuration settings are missing.
     """
-    # Get the local_path for chats
+    # Get the local_path for chats - use dynamic resolution
     local_path = config.get("local_path")
     if not local_path:
-        raise ConfigurationError(
-            "Local path not set. Use 'claudesync project set' or 'claudesync project create' to set it."
-        )
-
+        # Try to use current directory
+        local_path = os.getcwd()
+        
+        # If we're in a .claudesync directory, go up one level
+        if os.path.basename(local_path) == '.claudesync':
+            local_path = os.path.dirname(local_path)
+    
     # Create chats directory within local_path
     chat_destination = os.path.join(local_path, "claude_chats")
     os.makedirs(chat_destination, exist_ok=True)

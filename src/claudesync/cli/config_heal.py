@@ -1,95 +1,46 @@
+"""
+ClaudeSync Configuration Healer
+
+This module provides commands to fix and migrate existing configurations
+to use the minimal dynamic configuration system.
+"""
+
+import click
 import json
 import os
 import shutil
 from pathlib import Path
-
-import click
-
-from .category import category
-from ..exceptions import ConfigurationError
-from ..utils import handle_errors
-from ..dynamic_config import DynamicConfigManager
-from ..provider_factory import get_provider
 import logging
+from typing import List, Dict, Optional
+
+from claudesync.configmanager.file_config_manager import FileConfigManager
+from claudesync.dynamic_config import DynamicConfigManager
+from claudesync.provider_factory import ProviderFactory
 
 logger = logging.getLogger(__name__)
 
 
 @click.group()
 def config():
-    """Manage claudesync configuration."""
+    """Configuration management commands."""
     pass
 
 
 @config.command()
-@click.argument("key")
-@click.argument("value")
-@click.pass_obj
-@handle_errors
-def set(config, key, value):
-    """Set a configuration value."""
-    # Check if the key exists in the configuration
-    if key not in config.global_config and key not in config.local_config:
-        raise ConfigurationError(f"Configuration property '{key}' does not exist.")
-
-    # Convert string 'true' and 'false' to boolean
-    if value.lower() == "true":
-        value = True
-    elif value.lower() == "false":
-        value = False
-    # Try to convert to int or float if possible
-    else:
-        try:
-            value = int(value)
-        except ValueError:
-            try:
-                value = float(value)
-            except ValueError:
-                pass  # Keep as string if not a number
-
-    config.set(key, value)
-    click.echo(f"Configuration {key} set to {value}")
-
-
-@config.command()
-@click.argument("key")
-@click.pass_obj
-@handle_errors
-def get(config, key):
-    """Get a configuration value."""
-    value = config.get(key)
-    if value is None:
-        click.echo(f"Configuration {key} not found")
-    else:
-        click.echo(f"{key}: {value}")
-
-
-@config.command()
-@click.pass_obj
-@handle_errors
-def ls(config):
-    """List all configuration values."""
-    # Combine global and local configurations
-    combined_config = config.global_config.copy()
-    combined_config.update(config.local_config)
-
-    # Print the combined configuration as JSON
-    click.echo(json.dumps(combined_config, indent=2, sort_keys=True))
-
-
-@config.command(name='heal-all')
 @click.option('--workspace', '-w', default=None, help='Workspace root directory')
 @click.option('--backup/--no-backup', default=True, help='Backup existing configs')
 @click.option('--dry-run', is_flag=True, help='Preview changes without applying')
 @click.confirmation_option(prompt='This will modify all project configurations. Continue?')
-@click.pass_obj
-@handle_errors
-def heal_all(config, workspace, backup, dry_run):
+def heal_all(workspace, backup, dry_run):
     """
     Fix all project configurations in the workspace.
     
-    Converts all configurations to minimal format with only project_id,
-    allowing dynamic resolution of paths and names.
+    This command will:
+    1. Find all projects with .claudesync directories
+    2. Extract just the project_id from existing configs
+    3. Create minimal new configs with only project_id
+    4. Fix path mismatches
+    5. Auto-discover project IDs for configs without them
     """
     click.echo("Starting configuration healing process...")
     
@@ -100,19 +51,24 @@ def heal_all(config, workspace, backup, dry_run):
         # Try to auto-detect workspace
         root_path = Path.cwd()
         # Look for common workspace patterns
-        if 'Projects' in root_path.parts:
-            # Find the Projects directory
-            for i, part in enumerate(root_path.parts):
-                if part == 'Projects':
-                    root_path = Path(*root_path.parts[:i+1])
-                    break
+        if root_path.name == 'Projects' or 'Projects' in root_path.parts:
             click.echo(f"Using workspace: {root_path}")
+        else:
+            # Try to find Projects directory
+            for parent in root_path.parents:
+                projects_dir = parent / 'Projects'
+                if projects_dir.exists():
+                    root_path = projects_dir
+                    click.echo(f"Found workspace: {root_path}")
+                    break
     
     if not root_path.exists():
         click.echo(f"Error: Workspace not found: {root_path}", err=True)
         return
     
-    # Initialize dynamic config
+    # Initialize config and provider
+    config = FileConfigManager()
+    provider = ProviderFactory.get_provider(config)
     dynamic_config = DynamicConfigManager(config)
     
     # Find all projects
@@ -177,17 +133,17 @@ def heal_all(config, workspace, backup, dry_run):
             old_path = old_config.get('local_path', '')
             expected_path = str(project_path).replace('\\', '/')
             if old_path and old_path != expected_path:
-                issues.append(f"Path: {old_path} → {expected_path}")
+                issues.append(f"Path mismatch: {old_path} → {expected_path}")
             
             # Check name mismatch
             old_name = old_config.get('active_project_name', '')
             if old_name and old_name != project_name:
                 # Only report if significantly different
-                if old_name.replace('✨', '').replace('🔥', '').strip() != project_name.replace('✨', '').replace('🔥', '').strip():
-                    issues.append(f"Name: {old_name} ≠ {project_name}")
+                if old_name.replace('✨', '').strip() != project_name.replace('✨', '').strip():
+                    issues.append(f"Name mismatch: {old_name} ≠ {project_name}")
             
             if issues:
-                click.echo(f"  Fixed issues:")
+                click.echo(f"  Issues found:")
                 for issue in issues:
                     click.echo(f"    - {issue}")
             
@@ -195,9 +151,9 @@ def heal_all(config, workspace, backup, dry_run):
             if not dry_run:
                 with open(config_file, 'w', encoding='utf-8') as f:
                     json.dump(new_config, f, indent=2, ensure_ascii=False)
-                click.echo(f"  ✓ Healed to minimal config")
+                click.echo(f"  ✓ Healed configuration (minimal)")
             else:
-                click.echo(f"  [DRY RUN] Would save minimal config")
+                click.echo(f"  [DRY RUN] Would save minimal config with project_id: {new_config.get('active_project_id')}")
             
             fixed_count += 1
             
@@ -213,18 +169,18 @@ def heal_all(config, workspace, backup, dry_run):
         click.echo(f"  ✗ Errors: {error_count} projects")
     
     if dry_run:
-        click.echo(f"\n[DRY RUN] No changes made. Remove --dry-run to apply.")
+        click.echo(f"\n[DRY RUN] No changes were made. Remove --dry-run to apply changes.")
     else:
-        click.echo(f"\nConfigurations converted to minimal format.")
-        click.echo(f"Paths and names will resolve dynamically.")
+        click.echo(f"\nAll configurations have been converted to minimal format.")
+        click.echo(f"Project names and paths will now be resolved dynamically.")
 
 
-@config.command(name='heal')
+@config.command()
 @click.argument('project_path', required=False)
-@click.pass_obj
-@handle_errors
-def heal_one(config, project_path):
-    """Fix configuration for a single project."""
+def heal_one(project_path):
+    """
+    Fix configuration for a single project.
+    """
     if not project_path:
         project_path = os.getcwd()
     
@@ -235,6 +191,7 @@ def heal_one(config, project_path):
         click.echo(f"Error: No configuration found at {config_file}", err=True)
         return
     
+    config = FileConfigManager()
     dynamic_config = DynamicConfigManager(config)
     
     if dynamic_config.heal_config(str(project_path)):
@@ -243,14 +200,15 @@ def heal_one(config, project_path):
         click.echo(f"✗ Failed to heal configuration", err=True)
 
 
-@config.command(name='check')
-@click.pass_obj
-@handle_errors
-def check(config):
-    """Check configuration and show dynamic resolution."""
+@config.command()
+def check():
+    """
+    Check current configuration and show what would be resolved dynamically.
+    """
+    config = FileConfigManager()
     dynamic_config = DynamicConfigManager(config)
     
-    click.echo("Configuration Check:")
+    click.echo("Current Configuration:")
     click.echo("=" * 50)
     
     # Show stored values
@@ -261,7 +219,7 @@ def check(config):
     click.echo(f"  Organization ID: {config.local_config.get('active_organization_id', 'Not set')}")
     
     # Show dynamic values
-    click.echo("\nDynamic values (runtime resolution):")
+    click.echo("\nDynamic values (resolved at runtime):")
     click.echo(f"  Project Name: {dynamic_config.get('active_project_name', 'Not set')}")
     click.echo(f"  Local Path: {dynamic_config.get('local_path', 'Not set')}")
     click.echo(f"  Organization ID: {dynamic_config.get('active_organization_id', 'Not set')}")
@@ -276,6 +234,3 @@ def check(config):
         click.echo(f"  ✓ Can auto-discover project ID: {discovered_id}")
     else:
         click.echo(f"  ✗ Cannot auto-discover project")
-
-
-config.add_command(category)

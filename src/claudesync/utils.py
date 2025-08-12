@@ -291,12 +291,12 @@ def validate_and_get_provider(config, require_org=True, require_project=False):
     """
     if require_org and not config.get("active_organization_id"):
         raise ConfigurationError(
-            "No active organization set. Please select an organization (claudesync organization set)."
+            "No active organization set. Please select an organization (csync organization set)."
         )
 
     if require_project and not config.get("active_project_id"):
         raise ConfigurationError(
-            "No active project set. Please select or create a project (claudesync project set)."
+            "No active project set. Please select or create a project (csync project set)."
         )
 
     active_provider = config.get_active_provider()

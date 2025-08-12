@@ -61,8 +61,8 @@ def init(ctx, name, description, local_path, new, provider):
     """Initialize a new project configuration.
 
     If --new is specified, also creates a remote project on Claude.ai.
-    Otherwise, only creates the local configuration. Use 'claudesync organization set'
-    and 'claudesync project set' to link to an existing remote project."""
+    Otherwise, only creates the local configuration. Use 'csync organization set'
+    and 'csync project set' to link to an existing remote project."""
 
     config = ctx.obj
 
@@ -119,8 +119,8 @@ def init(ctx, name, description, local_path, new, provider):
             f"  - Project config location: {os.path.join(claudesync_dir, 'config.local.json')}"
         )
         click.echo("\nTo link to a remote project:")
-        click.echo("1. Run 'claudesync organization set' to select an organization")
-        click.echo("2. Run 'claudesync project set' to select an existing project")
+        click.echo("1. Run 'csync organization set' to select an organization")
+        click.echo("2. Run 'csync project set' to select an existing project")
 
 
 @project.command()

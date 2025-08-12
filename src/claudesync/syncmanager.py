@@ -4,6 +4,7 @@ import time
 import logging
 from datetime import datetime, timezone
 import io
+import unicodedata
 
 from tqdm import tqdm
 
@@ -14,6 +15,14 @@ from .conflict_resolver import ConflictResolver
 from .project_instructions import ProjectInstructions
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_unicode_path(path):
+    """Normalize Unicode in paths to handle escaped vs non-escaped comparisons."""
+    if not path:
+        return path
+    # Normalize to NFC form (composed) for consistent comparison
+    return unicodedata.normalize('NFC', str(path))
 
 
 def retry_on_403(max_retries=3, delay=1):
@@ -126,12 +135,23 @@ class SyncManager:
         self.update_local_timestamps(remote_files, synced_files)
 
         if self.two_way_sync:
+            # Track which local files exist remotely - normalize Unicode for comparison
+            remote_file_names = {normalize_unicode_path(rf["file_name"]) for rf in remote_files}
+            # Also account for renamed project instructions
+            if normalize_unicode_path('.projectinstructions') in remote_file_names:
+                remote_file_names.add(normalize_unicode_path('project-instructions.md'))
+                remote_file_names.discard(normalize_unicode_path('.projectinstructions'))
+            
             with tqdm(total=len(remote_files), desc="Local ← Remote") as pbar:
                 for remote_file in remote_files:
                     self.sync_remote_to_local(
                         remote_file, remote_files_to_delete, synced_files
                     )
                     pbar.update(1)
+            
+            # Prune local files that don't exist remotely (if enabled)
+            if self.config.get("prune_local_files", True):
+                self.prune_local_files(local_files, remote_file_names)
 
         self.prune_remote_files(remote_files, remote_files_to_delete)
 
@@ -443,6 +463,35 @@ class SyncManager:
                 logger.debug(f"Skipping deletion of {file_to_delete} (project instructions file)")
                 continue
             self.delete_remote_files(file_to_delete, remote_files)
+
+    def prune_local_files(self, local_files, remote_file_names):
+        """Delete local files that don't exist remotely."""
+        logger.debug("Checking for local files to prune...")
+        
+        local_files_to_delete = []
+        for local_file in local_files:
+            # Skip special files
+            if local_file in ['.claudesync', '.claudeignore', '.gitignore', '.git']:
+                continue
+            
+            # Check if file exists remotely (normalize Unicode for comparison)
+            normalized_local = normalize_unicode_path(local_file)
+            if normalized_local not in remote_file_names:
+                local_files_to_delete.append(local_file)
+        
+        if local_files_to_delete:
+            logger.info(f"Found {len(local_files_to_delete)} local file(s) to delete")
+            with tqdm(total=len(local_files_to_delete), desc="Pruning local files") as pbar:
+                for file_to_delete in local_files_to_delete:
+                    try:
+                        file_path = os.path.join(self.local_path, file_to_delete)
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            logger.debug(f"Deleted local file: {file_to_delete}")
+                        pbar.update(1)
+                    except Exception as e:
+                        logger.error(f"Failed to delete {file_to_delete}: {e}")
+                        pbar.update(1)
 
     @retry_on_403()
     def delete_remote_files(self, file_to_delete, remote_files):

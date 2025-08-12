@@ -54,7 +54,7 @@ def config(config):
     config_data = ws_config.get_config()
     
     click.echo("Workspace Configuration:")
-    click.echo(json.dumps(config_data, indent=2))
+    click.echo(json.dumps(config_data, indent=2, ensure_ascii=False))
 
 @workspace.command()
 @click.pass_obj
@@ -68,35 +68,64 @@ def reset(config):
 
 @workspace.command()
 @click.option('--json', 'output_json', is_flag=True, help='Output in JSON format')
+@click.option('--show-remote', is_flag=True, help='Also show remote projects not cloned locally')
 @click.pass_obj
 @handle_errors
-def discover(config, output_json):
+def discover(config, output_json, show_remote):
     """Discover all ClaudeSync projects in workspace."""
     ws_config = WorkspaceConfig()
     manager = WorkspaceManager(ws_config)
     
     projects = manager.discover_projects()
+    remote_not_local = []
+    
+    # Check for remote projects if requested
+    if show_remote:
+        provider = validate_and_get_provider(config)
+        organization_id = config.get('active_organization_id')
+        
+        if organization_id:
+            try:
+                remote_projects = provider.get_projects(organization_id, include_archived=False)
+                local_project_ids = {p['id'] for p in projects if p.get('id')}
+                remote_not_local = [p for p in remote_projects if p['id'] not in local_project_ids]
+            except Exception as e:
+                click.echo(f"Warning: Could not fetch remote projects: {str(e)}")
     
     if output_json:
-        click.echo(json.dumps(projects, indent=2))
+        output = {
+            'local': projects,
+            'remote_only': [{'name': p['name'], 'id': p['id']} for p in remote_not_local] if show_remote else []
+        }
+        click.echo(json.dumps(output, indent=2, ensure_ascii=False))
     else:
-        if not projects:
+        if not projects and not remote_not_local:
             click.echo("No ClaudeSync projects found.")
             if not ws_config.get_workspace_root():
                 click.echo("Tip: Set a workspace root with 'csync workspace set-root <path>'")
         else:
-            click.echo(f"Found {len(projects)} project(s):")
-            for project in projects:
-                click.echo(f"\n  {project['name']}")
-                click.echo(f"    Path: {project['path']}")
-                click.echo(f"    ID: {project['id']}")
+            if projects:
+                click.echo(f"Found {len(projects)} local project(s):")
+                for project in projects:
+                    click.echo(f"\n  📁 {project['name']}")
+                    click.echo(f"     Path: {project['path']}")
+                    click.echo(f"     ID: {project['id']}")
+            
+            if remote_not_local:
+                click.echo(f"\nFound {len(remote_not_local)} remote project(s) not cloned locally:")
+                for project in remote_not_local[:10]:  # Show first 10
+                    click.echo(f"  ☁️  {project['name']}")
+                if len(remote_not_local) > 10:
+                    click.echo(f"  ... and {len(remote_not_local) - 10} more")
+                click.echo("\nTip: Run 'csync workspace sync-all' to clone these projects")
 
 @workspace.command()
 @click.option('--sequential', is_flag=True, help='Sync projects one at a time')
 @click.option('--dry-run', is_flag=True, help='Show detailed preview of changes')
 @click.option('--verbose', is_flag=True, help='Show enhanced dry-run details')
 @click.option('--no-prune', is_flag=True, help='Do not delete remote files missing locally')
-@click.option('--two-way', is_flag=True, help='Enable two-way sync for all projects')
+@click.option('--no-prune-local', is_flag=True, help='Do not delete local files missing remotely') 
+@click.option('--one-way', is_flag=True, help='Use one-way sync (push only, like old behavior)')
 @click.option('--push-only', is_flag=True, help='Only push local changes (no pull)')
 @click.option('--pull-only', is_flag=True, help='Only pull remote changes (no push)')
 @click.option('--no-instructions', is_flag=True, help='Skip syncing project instructions files')
@@ -108,19 +137,120 @@ def discover(config, output_json):
 @click.option('--filter', 'project_filter', help='Only sync projects matching pattern')
 @click.option('--exclude', 'project_exclude', help='Skip projects matching pattern')
 @click.option('--parallel-workers', type=int, default=4, help='Number of parallel workers')
+@click.option('--local-only', is_flag=True, help='Skip checking for new remote projects')
 @click.pass_obj
 @handle_errors
-def sync_all(config, sequential, dry_run, verbose, no_prune, two_way, push_only, 
+def sync_all(config, sequential, dry_run, verbose, no_prune, no_prune_local, one_way, push_only, 
              pull_only, no_instructions, watch_after, conflict_strategy,
-             project_filter, project_exclude, parallel_workers):
-    """Sync all projects in the workspace with granular control."""
+             project_filter, project_exclude, parallel_workers, local_only):
+    """Sync all projects in workspace (TRUE bidirectional sync by default).
+    
+    By default, performs true bidirectional sync:
+    - Uploads new local files
+    - Downloads new remote files  
+    - Deletes local files that don't exist remotely
+    - Deletes remote files that don't exist locally
+    
+    Use --one-way for old behavior (push only, no local deletions).
+    Use --no-prune to keep remote files that don't exist locally.
+    Use --no-prune-local to keep local files that don't exist remotely.
+    """
     
     # Validate conflicting options
     if push_only and pull_only:
         raise click.BadParameter("Cannot use both --push-only and --pull-only")
     
+    if one_way and (push_only or pull_only):
+        raise click.BadParameter("Cannot use --one-way with --push-only or --pull-only")
+    
     ws_config = WorkspaceConfig()
     manager = WorkspaceManager(ws_config)
+    
+    # Check for new remote projects first (unless local-only)
+    if not local_only and not push_only:
+        provider = validate_and_get_provider(config)
+        organization_id = config.get('active_organization_id')
+        
+        if organization_id:
+            try:
+                remote_projects = provider.get_projects(organization_id, include_archived=False)
+                local_projects = manager.discover_projects()
+                local_project_ids = {p['id'] for p in local_projects if p.get('id')}
+                
+                new_remote_projects = [p for p in remote_projects if p['id'] not in local_project_ids]
+                
+                if new_remote_projects:
+                    click.echo(f"Found {len(new_remote_projects)} new remote project(s) to clone:")
+                    for project in new_remote_projects[:5]:  # Show first 5
+                        click.echo(f"  • {project['name']}")
+                    if len(new_remote_projects) > 5:
+                        click.echo(f"  ... and {len(new_remote_projects) - 5} more")
+                    
+                    if not dry_run and click.confirm("\nClone new remote projects before syncing?"):
+                        # Clone the new projects
+                        workspace_root = ws_config.get_workspace_root() or os.getcwd()
+                        cloned = 0
+                        
+                        for project in new_remote_projects:
+                            project_name = project['name']
+                            project_id = project['id']
+                            
+                            # Sanitize project name for filesystem
+                            invalid_chars = '<>:"/\\|?*'
+                            safe_name = "".join(c if c not in invalid_chars else '_' for c in project_name).strip()
+                            project_path = os.path.join(workspace_root, safe_name)
+                            
+                            if not os.path.exists(project_path):
+                                try:
+                                    os.makedirs(project_path, exist_ok=True)
+                                    claudesync_dir = os.path.join(project_path, '.claudesync')
+                                    os.makedirs(claudesync_dir, exist_ok=True)
+                                    
+                                    local_config = {
+                                        "active_provider": "claude.ai",
+                                        "local_path": project_path,
+                                        "active_organization_id": organization_id,
+                                        "active_project_id": project_id,
+                                        "active_project_name": project_name
+                                    }
+                                    
+                                    config_file = os.path.join(claudesync_dir, 'config.local.json')
+                                    with open(config_file, 'w', encoding='utf-8') as f:
+                                        json.dump(local_config, f, indent=2, ensure_ascii=False)
+                                    
+                                    click.echo(f"  ✓ Cloned: {project_name}")
+                                    
+                                    # Pull files from remote
+                                    try:
+                                        remote_files = provider.list_files(organization_id, project_id)
+                                        if remote_files:
+                                            click.echo(f"    Pulling {len(remote_files)} file(s)...")
+                                            for remote_file in remote_files:
+                                                file_name = remote_file['file_name']
+                                                # Handle special project instructions file
+                                                if file_name == '.projectinstructions':
+                                                    file_name = 'project-instructions.md'
+                                                
+                                                file_path = os.path.join(project_path, file_name)
+                                                # Create directory if needed
+                                                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                                                
+                                                # Download file content
+                                                content = provider.get_file(organization_id, project_id, remote_file.get('uuid', remote_file.get('id')))
+                                                with open(file_path, 'w', encoding='utf-8') as f:
+                                                    f.write(content)
+                                            click.echo(f"    ✓ Files pulled successfully")
+                                    except Exception as pull_error:
+                                        click.echo(f"    ⚠️  Could not pull files: {str(pull_error)}")
+                                    
+                                    cloned += 1
+                                except Exception as e:
+                                    click.echo(f"  ✗ Failed to clone {project_name}: {str(e)}")
+                        
+                        if cloned > 0:
+                            click.echo(f"Cloned {cloned} new project(s)\n")
+            except Exception as e:
+                click.echo(f"Warning: Could not check for remote projects: {str(e)}")
     
     projects = manager.discover_projects()
     
@@ -137,7 +267,8 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, two_way, push_only,
     # Prepare sync options
     sync_options = {
         'prune_remote': not no_prune,
-        'two_way_sync': two_way,
+        'prune_local': not no_prune_local,  # New option for local pruning
+        'two_way_sync': not one_way,  # Default to true unless --one-way is specified
         'push_only': push_only,
         'pull_only': pull_only,
         'with_instructions': not no_instructions,  # Inverted - default is True
@@ -150,8 +281,13 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, two_way, push_only,
     # Show configuration
     if verbose or dry_run:
         click.echo("\nSync Configuration:")
-        click.echo(f"  Direction: {'Pull only' if pull_only else 'Push only' if push_only else 'Bidirectional' if two_way else 'Push (standard)'}")
-        click.echo(f"  Prune remote: {'No' if no_prune else 'Yes'}")
+        sync_mode = 'Pull only' if pull_only else 'Push only' if push_only else 'One-way push' if one_way else 'True bidirectional'
+        click.echo(f"  Mode: {sync_mode}")
+        if not one_way and not push_only and not pull_only:
+            click.echo(f"  Delete remote files not in local: {'No' if no_prune else 'Yes'}")
+            click.echo(f"  Delete local files not in remote: {'No' if no_prune_local else 'Yes'}")
+        elif not pull_only:
+            click.echo(f"  Delete remote files not in local: {'No' if no_prune else 'Yes'}")
         click.echo(f"  Instructions: {'Skip' if no_instructions else 'Include'}")
         click.echo(f"  Conflicts: {conflict_strategy}")
         click.echo(f"  Parallelism: {sync_options['parallel_workers']} workers")
@@ -186,7 +322,7 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, two_way, push_only,
                 click.echo(f"  ↓ Files to download: {stats['files_to_pull']}")
             if stats['files_to_delete_remote'] > 0 and not no_prune:
                 click.echo(f"  🗑️  Remote files to delete: {stats['files_to_delete_remote']}")
-            if stats['files_to_delete_local'] > 0 and two_way:
+            if stats['files_to_delete_local'] > 0 and not no_prune_local and not one_way:
                 click.echo(f"  🗑️  Local files to delete: {stats['files_to_delete_local']}")
             if stats['instructions_status']:
                 click.echo(f"  📝 Instructions: {stats['instructions_status']}")
@@ -206,7 +342,7 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, two_way, push_only,
         click.echo(f"Total files to download: {total_stats['files_to_pull']}")
         if not no_prune and total_stats['files_to_delete_remote'] > 0:
             click.echo(f"Total remote files to delete: {total_stats['files_to_delete_remote']}")
-        if two_way and total_stats['files_to_delete_local'] > 0:
+        if not one_way and not no_prune_local and total_stats['files_to_delete_local'] > 0:
             click.echo(f"Total local files to delete: {total_stats['files_to_delete_local']}")
         if not no_instructions:
             click.echo(f"Instructions to update: {total_stats['instructions_to_update']}")
@@ -253,9 +389,11 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, two_way, push_only,
 @workspace.command()
 @click.option('--dry-run', is_flag=True, help='Preview what will be downloaded')
 @click.option('--backup-existing', is_flag=True, help='Backup existing chat files')
+@click.option('--skip-errors', is_flag=True, help='Continue even if some projects fail')
+@click.option('--verbose', '-v', is_flag=True, help='Show detailed progress')
 @click.pass_obj
 @handle_errors
-def chat_pull_all(config, dry_run, backup_existing):
+def chat_pull_all(config, dry_run, backup_existing, skip_errors, verbose):
     """Pull chats for all projects in workspace."""
     ws_config = WorkspaceConfig()
     manager = WorkspaceManager(ws_config)
@@ -274,24 +412,30 @@ def chat_pull_all(config, dry_run, backup_existing):
     # Pull chats
     safety_options = {
         'dry_run': dry_run,
-        'backup_existing': backup_existing
+        'backup_existing': backup_existing,
+        'skip_errors': skip_errors,
+        'verbose': verbose
     }
     
+    click.echo("\nStarting chat pull process...")
     results = manager.pull_all_chats(projects, safety_options)
     
-    # Show results
-    click.echo("\nChat Pull Results:")
+    # Show final summary
+    click.echo("\n" + "="*60)
+    click.echo("Chat Pull Summary:")
+    click.echo("="*60)
     
     success_count = sum(1 for r in results if r['status'] == 'success')
     failed_count = sum(1 for r in results if r['status'] in ['failed', 'error'])
     
-    for result in results:
-        if result['status'] == 'success':
-            click.echo(f"  ✓ {result['project']}")
-        else:
-            click.echo(f"  ✗ {result['project']}: {result['message']}")
+    if verbose or failed_count > 0:
+        for result in results:
+            if result['status'] == 'success':
+                click.echo(f"  ✓ {result['project']}")
+            else:
+                click.echo(f"  ✗ {result['project']}: {result['message'][:100]}")
     
-    click.echo(f"\nSummary: {success_count} succeeded, {failed_count} failed")
+    click.echo(f"\nTotal: {success_count} succeeded, {failed_count} failed out of {len(projects)} projects")
 
 @workspace.command()
 @click.pass_obj
@@ -445,7 +589,7 @@ def clone(config, output_dir, include_archived, name_filter, skip_existing, dry_
 @click.option('--show-ids', is_flag=True, help='Show project IDs')
 @click.pass_obj
 @handle_errors
-def list(config):
+def list(config, include_archived, show_ids):
     """List all remote Claude.ai projects."""
     provider = validate_and_get_provider(config)
     organization_id = config.get('active_organization_id')

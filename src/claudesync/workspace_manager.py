@@ -211,7 +211,7 @@ class WorkspaceManager:
         return results
     
     def _sync_single_project(self, project: Dict, sync_options: Dict) -> Dict:
-        """Sync a single project with options."""
+        """Sync a single project with TRUE bidirectional sync."""
         start_time = time.time()
         
         try:
@@ -224,7 +224,11 @@ class WorkspaceManager:
             if not sync_options.get('prune_remote', True):
                 config_cmds.append(['csync', 'config', 'set', 'prune_remote_files', 'false'])
             
-            if sync_options.get('two_way_sync'):
+            if not sync_options.get('prune_local', True):
+                config_cmds.append(['csync', 'config', 'set', 'prune_local_files', 'false'])
+            
+            # Always enable two_way_sync for true bidirectional sync unless one-way is requested
+            if not sync_options.get('push_only') and not sync_options.get('pull_only'):
                 config_cmds.append(['csync', 'config', 'set', 'two_way_sync', 'true'])
             
             # Run config commands
@@ -276,69 +280,33 @@ class WorkspaceManager:
                 # Then do regular push
                 cmd.append('push')
             else:
-                # Bidirectional sync
-                if sync_options.get('two_way_sync'):
-                    # Sync instructions first
-                    if sync_options.get('with_instructions', True):  # Default to True
-                        instructions_result = subprocess.run(
-                            ['csync', 'project', 'instructions', 'sync'],
-                            cwd=project['path'],
-                            capture_output=True,
-                            text=True,
-                            encoding='utf-8',
-                            errors='replace',
-                            timeout=30
-                        )
-                        # Don't fail if instructions sync fails
-                        if instructions_result.returncode != 0:
-                            logger.debug(f"Instructions sync failed for {project['name']}: {instructions_result.stderr}")
-                    
-                    # Then do regular sync
-                    cmd.append('sync')
-                    cmd.extend(['--conflict-strategy', sync_options.get('conflict_strategy', 'prompt')])
-                else:
-                    # Standard sync: always sync instructions first, then pull, then push
-                    
-                    # Step 1: Sync project instructions explicitly
-                    if sync_options.get('with_instructions', True):  # Default to True
-                        instructions_result = subprocess.run(
-                            ['csync', 'project', 'instructions', 'pull'],
-                            cwd=project['path'],
-                            capture_output=True,
-                            text=True,
-                            encoding='utf-8',
-                            errors='replace',
-                            timeout=30
-                        )
-                        # Don't fail if instructions pull fails, just log it
-                        if instructions_result.returncode != 0:
-                            logger.debug(f"Instructions pull failed for {project['name']}: {instructions_result.stderr}")
-                    
-                    # Step 2: Pull all other files
-                    pull_result = subprocess.run(
-                        ['csync', 'pull'],
+                # TRUE BIDIRECTIONAL SYNC - always use the sync command with two_way_sync enabled
+                
+                # Step 1: Sync project instructions first
+                if sync_options.get('with_instructions', True):  # Default to True
+                    instructions_result = subprocess.run(
+                        ['csync', 'project', 'instructions', 'sync'],
                         cwd=project['path'],
                         capture_output=True,
                         text=True,
-                        encoding='utf-8',  # Handle unicode properly
-                        errors='replace',   # Replace invalid chars instead of failing
-                        timeout=120
+                        encoding='utf-8',
+                        errors='replace',
+                        timeout=30
                     )
-                    
-                    if pull_result.returncode != 0 and "No remote files" not in pull_result.stderr:
-                        # Don't fail on unicode errors
-                        error_msg = pull_result.stderr.strip() or 'Unknown error'
-                        if 'UnicodeEncodeError' not in error_msg:
-                            return {
-                                'project': project['name'],
-                                'path': project['path'],
-                                'status': 'failed',
-                                'message': f"Pull failed: {error_msg}",
-                                'duration': time.time() - start_time
-                            }
-                    
-                    # Step 3: Push all files (including instructions if modified)
-                    cmd.append('push')
+                    # Don't fail if instructions sync fails, just log it
+                    if instructions_result.returncode != 0:
+                        logger.debug(f"Instructions sync failed for {project['name']}: {instructions_result.stderr}")
+                
+                # Step 2: Use the sync command for true bidirectional sync
+                cmd.append('sync')
+                cmd.extend(['--conflict-strategy', sync_options.get('conflict_strategy', 'prompt')])
+                
+                # Note: With two_way_sync enabled in config, the sync command will:
+                # - Pull remote files that don't exist locally
+                # - Push local files that don't exist remotely  
+                # - Update files that differ (based on checksums)
+                # - Delete local files that don't exist remotely
+                # - Delete remote files that don't exist locally (if prune_remote is true)
             
             # Run main sync command
             result = subprocess.run(
@@ -353,10 +321,14 @@ class WorkspaceManager:
             
             # Reset config if changed
             for config_cmd in config_cmds:
-                if 'false' in config_cmd:
-                    reset_cmd = config_cmd[:-1] + ['true']
+                if 'prune_remote_files' in config_cmd:
+                    reset_cmd = ['csync', 'config', 'set', 'prune_remote_files', 'true']
+                elif 'prune_local_files' in config_cmd:
+                    reset_cmd = ['csync', 'config', 'set', 'prune_local_files', 'true']
+                elif 'two_way_sync' in config_cmd:
+                    reset_cmd = ['csync', 'config', 'set', 'two_way_sync', 'false']
                 else:
-                    reset_cmd = config_cmd[:-1] + ['false']
+                    continue
                 subprocess.run(reset_cmd, cwd=project['path'], capture_output=True, text=True,
                               encoding='utf-8', errors='replace')
             
@@ -493,42 +465,105 @@ class WorkspaceManager:
             if safety_options.get('backup_existing'):
                 safety_args.append('--backup-existing')
         
-        with click.progressbar(projects,
-                             label='Pulling chats',
-                             item_show_func=lambda p: p['name'] if p else '') as bar:
+        # Process projects with detailed feedback
+        for idx, project in enumerate(projects, 1):
+            project_name = project['name']
+            click.echo(f"\n[{idx}/{len(projects)}] Processing: {project_name}")
             
-            for project in bar:
-                try:
-                    cmd = ['csync', 'chat', 'pull'] + safety_args
-                    result = subprocess.run(
-                        cmd,
-                        cwd=project['path'],
-                        capture_output=True,
-                        text=True,
-                        encoding='utf-8',
-                        errors='replace',
-                        timeout=120  # 2 minute timeout
-                    )
-                    
-                    if result.returncode == 0:
-                        results.append({
-                            'project': project['name'],
-                            'status': 'success',
-                            'message': 'Chats pulled successfully'
-                        })
-                    else:
-                        results.append({
-                            'project': project['name'],
-                            'status': 'failed',
-                            'message': result.stderr.strip() or 'Unknown error'
-                        })
-                
-                except Exception as e:
+            try:
+                # Ensure path exists and is valid
+                project_path = project['path']
+                if not os.path.exists(project_path):
                     results.append({
-                        'project': project['name'],
+                        'project': project_name,
                         'status': 'error',
-                        'message': str(e)
+                        'message': f'Project path does not exist: {project_path}'
                     })
+                    continue
+                
+                # Check for .claudesync directory
+                claudesync_dir = os.path.join(project_path, '.claudesync')
+                if not os.path.exists(claudesync_dir):
+                    results.append({
+                        'project': project_name,
+                        'status': 'error',
+                        'message': 'No .claudesync directory found'
+                    })
+                    continue
+                
+                # Get current organization from global config
+                from claudesync.configmanager.file_config_manager import FileConfigManager
+                global_config = FileConfigManager()
+                org_id = global_config.get("active_organization_id")
+                
+                # Build command with proper encoding and organization context
+                cmd = ['csync', 'chat', 'pull'] + safety_args
+                
+                # Debug output
+                click.echo(f"  Running: {' '.join(cmd)}")
+                click.echo(f"  In directory: {project_path}")
+                if org_id:
+                    click.echo(f"  Using organization: {org_id[:8]}...")
+                
+                # Use shell=True on Windows for better path handling
+                import platform
+                use_shell = platform.system() == 'Windows'
+                
+                # Set environment variable to pass organization context
+                env = os.environ.copy()
+                if org_id:
+                    env['CLAUDESYNC_ORG_ID'] = org_id
+                
+                # Run with shorter timeout and better error handling
+                result = subprocess.run(
+                    cmd,
+                    cwd=project_path,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    timeout=30,  # Reduced from 120 to 30 seconds
+                    shell=use_shell,
+                    env=env
+                )
+                
+                if result.returncode == 0:
+                    # Check if there's actual output
+                    output = result.stdout.strip()
+                    if output:
+                        click.echo(f"  ✓ Success: {output[:100]}")  # Show first 100 chars
+                    else:
+                        click.echo(f"  ✓ Chats pulled successfully")
+                    
+                    results.append({
+                        'project': project_name,
+                        'status': 'success',
+                        'message': 'Chats pulled successfully'
+                    })
+                else:
+                    error_msg = result.stderr.strip() or result.stdout.strip() or 'Unknown error'
+                    click.echo(f"  ✗ Failed: {error_msg[:200]}")  # Show first 200 chars
+                    
+                    results.append({
+                        'project': project_name,
+                        'status': 'failed',
+                        'message': error_msg
+                    })
+            
+            except subprocess.TimeoutExpired:
+                click.echo(f"  ✗ Timeout: Command took longer than 30 seconds")
+                results.append({
+                    'project': project_name,
+                    'status': 'error',
+                    'message': 'Command timed out after 30 seconds'
+                })
+            except Exception as e:
+                click.echo(f"  ✗ Error: {str(e)}")
+                results.append({
+                    'project': project_name,
+                    'status': 'error',
+                    'message': str(e)
+                })
         
         return results
     
