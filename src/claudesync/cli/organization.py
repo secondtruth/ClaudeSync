@@ -9,9 +9,11 @@ def organization():
 
 
 @organization.command()
+@click.option("--format", "fmt", type=click.Choice(["json", "table"]), default="table",
+              help="Output format (table or JSON)")
 @click.pass_obj
 @handle_errors
-def ls(config):
+def ls(config, fmt):
     """List all available organizations with required capabilities."""
     provider = validate_and_get_provider(config, require_org=False)
     organizations = provider.get_organizations()
@@ -20,9 +22,13 @@ def ls(config):
             "No organizations with required capabilities (chat and claude_pro) found."
         )
     else:
-        click.echo("Available organizations with required capabilities:")
-        for idx, org in enumerate(organizations, 1):
-            click.echo(f"  {idx}. {org['name']} (ID: {org['id']})")
+        if fmt == "json":
+            import json
+            click.echo(json.dumps(organizations, indent=2))
+        else:
+            click.echo("Available organizations with required capabilities:")
+            for idx, org in enumerate(organizations, 1):
+                click.echo(f"  {idx}. {org['name']} (ID: {org['id']})")
 
 
 @organization.command()

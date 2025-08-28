@@ -327,8 +327,116 @@ class WorkspaceView:
         ):
             return
             
-        # TODO: Implement batch sync
-        messagebox.showinfo("Info", "Batch sync functionality coming soon!")
+        # Import required modules
+        import threading
+        from claudesync.syncmanager import SyncManager, SyncDirection
+        from claudesync.configmanager import FileConfigManager
+        from claudesync.providers import ClaudeAIProvider
+        from claudesync.utils import get_local_files
+        
+        # Create progress window
+        progress_window = ctk.CTkToplevel(self.gui.root)
+        progress_window.title("Syncing Projects...")
+        progress_window.geometry("600x400")
+        progress_window.transient(self.gui.root)
+        
+        # Progress display
+        progress_text = ctk.CTkTextbox(progress_window)
+        progress_text.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Progress bar
+        progress_bar = ctk.CTkProgressBar(progress_window)
+        progress_bar.pack(fill="x", padx=10, pady=(0, 10))
+        progress_bar.set(0)
+        
+        # Cancel button
+        cancel_event = threading.Event()
+        cancel_btn = ctk.CTkButton(
+            progress_window,
+            text="Cancel",
+            command=lambda: cancel_event.set()
+        )
+        cancel_btn.pack(pady=(0, 10))
+        
+        def sync_worker():
+            """Worker thread for syncing projects"""
+            success_count = 0
+            error_count = 0
+            total = len(self.discovered_projects)
+            
+            for i, project in enumerate(self.discovered_projects, 1):
+                if cancel_event.is_set():
+                    break
+                    
+                project_path = project['full_path']
+                project_name = project['name']
+                
+                # Update progress
+                self.gui.root.after(0, lambda n=project_name, idx=i, t=total: progress_text.insert("end", f"\n[{idx}/{t}] Syncing {n}..."))
+                self.gui.root.after(0, lambda v=i/total: progress_bar.set(v))
+                
+                try:
+                    # Load project config
+                    config_path = os.path.join(project_path, '.claudesync')
+                    if not os.path.exists(config_path):
+                        raise Exception("No .claudesync directory found")
+                        
+                    # Initialize config manager
+                    os.chdir(project_path)  # Change to project directory
+                    project_config = FileConfigManager(config_path)
+                    
+                    # Get provider
+                    session_key = project_config.get_session_key()
+                    if not session_key:
+                        raise Exception("No session key found")
+                    provider = ClaudeAIProvider(session_key)
+                    
+                    # Get project details
+                    org_id = project_config.get("active_organization_id")
+                    proj_id = project_config.get("active_project_id")
+                    
+                    if not org_id or not proj_id:
+                        raise Exception("Project not properly configured")
+                    
+                    # Get files
+                    local_files = get_local_files(project_config, project_path)
+                    remote_files = provider.list_files(org_id, proj_id)
+                    
+                    # Initialize sync manager
+                    sync_manager = SyncManager(provider, project_config, project_path)
+                    
+                    # Build and execute sync plan
+                    plan = sync_manager.build_plan(
+                        direction=SyncDirection.BOTH,
+                        dry_run=False,
+                        conflict_strategy='local-wins',
+                        local_files=local_files,
+                        remote_files=remote_files
+                    )
+                    
+                    if plan.total_operations > 0:
+                        results = sync_manager.execute_plan(plan)
+                        up = results.get('uploaded', 0)
+                        down = results.get('downloaded', 0)
+                        self.gui.root.after(0, lambda: progress_text.insert("end", f" ✓ ({up} up, {down} down)"))
+                    else:
+                        self.gui.root.after(0, lambda: progress_text.insert("end", " ✓ (no changes)"))
+                        
+                    success_count += 1
+                    
+                except Exception as e:
+                    self.gui.root.after(0, lambda err=str(e): progress_text.insert("end", f" ✗ Error: {err}"))
+                    error_count += 1
+            
+            # Final summary
+            self.gui.root.after(0, lambda: progress_text.insert("end", f"\n\n{'='*60}\n"))
+            self.gui.root.after(0, lambda: progress_text.insert("end", f"Sync Complete: {success_count} successful, {error_count} failed\n"))
+            self.gui.root.after(0, lambda: progress_bar.set(1))
+            self.gui.root.after(0, lambda: cancel_btn.configure(text="Close", command=progress_window.destroy))
+        
+        # Start sync in background thread
+        thread = threading.Thread(target=sync_worker, daemon=True)
+        thread.start()
         
     def _open_project(self, project):
         """Open project directory"""
@@ -345,8 +453,55 @@ class WorkspaceView:
             
     def _sync_project(self, project):
         """Sync individual project"""
-        # TODO: Implement individual project sync
-        messagebox.showinfo("Info", f"Sync for '{project['name']}' coming soon!")
+        from claudesync.syncmanager import SyncManager, SyncDirection
+        from claudesync.configmanager import FileConfigManager
+        from claudesync.providers import ClaudeAIProvider
+        from claudesync.utils import get_local_files
+        
+        project_path = project['full_path']
+        project_name = project['name']
+        
+        try:
+            # Initialize config and provider
+            os.chdir(project_path)
+            config_path = os.path.join(project_path, '.claudesync')
+            project_config = FileConfigManager(config_path)
+            
+            session_key = project_config.get_session_key()
+            if not session_key:
+                messagebox.showerror("Error", f"No session key found for {project_name}")
+                return
+                
+            provider = ClaudeAIProvider(session_key)
+            
+            # Get project details
+            org_id = project_config.get("active_organization_id")
+            proj_id = project_config.get("active_project_id")
+            
+            # Get files and sync
+            local_files = get_local_files(project_config, project_path)
+            remote_files = provider.list_files(org_id, proj_id)
+            
+            sync_manager = SyncManager(provider, project_config, project_path)
+            plan = sync_manager.build_plan(
+                direction=SyncDirection.BOTH,
+                dry_run=False,
+                conflict_strategy='local-wins',
+                local_files=local_files,
+                remote_files=remote_files
+            )
+            
+            if plan.total_operations > 0:
+                results = sync_manager.execute_plan(plan)
+                messagebox.showinfo("Success", 
+                    f"Sync complete for '{project_name}':\n"
+                    f"Uploaded: {results.get('uploaded', 0)} files\n"
+                    f"Downloaded: {results.get('downloaded', 0)} files")
+            else:
+                messagebox.showinfo("Info", f"No changes needed for '{project_name}'")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Sync failed for '{project_name}': {str(e)}")
         
     def _show_error(self, message):
         """Show error message"""

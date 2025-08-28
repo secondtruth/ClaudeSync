@@ -298,9 +298,11 @@ def set(ctx, show_all, provider):
     is_flag=True,
     help="Include archived projects in the list",
 )
+@click.option("--format", "fmt", type=click.Choice(["json", "table"]), default="table",
+              help="Output format (table or JSON)")
 @click.pass_obj
 @handle_errors
-def ls(config, show_all):
+def ls(config, show_all, fmt):
     """List all projects in the active organization."""
     provider = validate_and_get_provider(config)
     active_organization_id = config.get("active_organization_id")
@@ -308,10 +310,14 @@ def ls(config, show_all):
     if not projects:
         click.echo("No projects found.")
     else:
-        click.echo("Remote projects:")
-        for project in projects:
-            status = " (Archived)" if project.get("archived_at") else ""
-            click.echo(f"  - {project['name']} (ID: {project['id']}){status}")
+        if fmt == "json":
+            import json
+            click.echo(json.dumps(projects, indent=2))
+        else:
+            click.echo("Remote projects:")
+            for project in projects:
+                status = " (Archived)" if project.get("archived_at") else ""
+                click.echo(f"  - {project['name']} (ID: {project['id']}){status}")
 
 
 @project.command()

@@ -5,6 +5,9 @@ import logging
 from datetime import datetime, timezone
 import io
 import unicodedata
+from enum import Enum
+from dataclasses import dataclass
+from typing import List, Literal, Optional
 
 from tqdm import tqdm
 
@@ -15,6 +18,29 @@ from .conflict_resolver import ConflictResolver
 from .project_instructions import ProjectInstructions
 
 logger = logging.getLogger(__name__)
+
+# Sync Direction Enum as suggested by ChatGPT
+class SyncDirection(Enum):
+    PUSH = "push"
+    PULL = "pull"
+    BOTH = "both"
+
+@dataclass
+class PlanItem:
+    action: Literal["upload", "download", "delete_local", "delete_remote", "conflict", "noop"]
+    path: str
+    reason: str
+    local_hash: Optional[str] = None
+    remote_hash: Optional[str] = None
+
+@dataclass
+class SyncPlan:
+    actions: List[PlanItem]
+    conflicts: List[PlanItem]
+    
+    @property
+    def total_operations(self):
+        return len(self.actions) + len(self.conflicts)
 
 
 def normalize_unicode_path(path):
@@ -65,6 +91,217 @@ class SyncManager:
         self.retry_delay = 1
         self.compression_algorithm = config.get("compression_algorithm", "none")
         self.synced_files = {}
+    
+    def build_plan(
+        self,
+        *,
+        direction: SyncDirection,
+        dry_run: bool,
+        conflict_strategy: Literal["prompt", "local-wins", "remote-wins"],
+        local_files: list,
+        remote_files: list,
+    ) -> SyncPlan:
+        """Build sync plan based on direction and strategy."""
+        plan = SyncPlan(actions=[], conflicts=[])
+        
+        # Create lookup maps
+        remote_map = {normalize_unicode_path(f['file_name']): f for f in remote_files}
+        local_map = {normalize_unicode_path(f): f for f in local_files}
+        
+        # Handle PUSH or BOTH - local files to upload
+        if direction in (SyncDirection.PUSH, SyncDirection.BOTH):
+            for local_file in local_files:
+                norm_path = normalize_unicode_path(local_file)
+                if norm_path not in remote_map:
+                    plan.actions.append(PlanItem(
+                        action="upload",
+                        path=local_file,
+                        reason="New local file",
+                        local_hash=compute_md5_hash(os.path.join(self.local_path, local_file))
+                    ))
+                else:
+                    remote_file = remote_map[norm_path]
+                    local_hash = compute_md5_hash(os.path.join(self.local_path, local_file))
+                    if local_hash != remote_file.get('file_hash'):
+                        plan.actions.append(PlanItem(
+                            action="upload",
+                            path=local_file,
+                            reason="Local file modified",
+                            local_hash=local_hash,
+                            remote_hash=remote_file.get('file_hash')
+                        ))
+        
+        # Handle PULL or BOTH - remote files to download
+        if direction in (SyncDirection.PULL, SyncDirection.BOTH):
+            for remote_file in remote_files:
+                file_name = remote_file['file_name']
+                norm_path = normalize_unicode_path(file_name)
+                
+                if norm_path not in local_map:
+                    plan.actions.append(PlanItem(
+                        action="download",
+                        path=file_name,
+                        reason="New remote file",
+                        remote_hash=remote_file.get('file_hash')
+                    ))
+                else:
+                    local_path = os.path.join(self.local_path, file_name)
+                    if os.path.exists(local_path):
+                        local_hash = compute_md5_hash(local_path)
+                        if local_hash != remote_file.get('file_hash'):
+                            # Check for conflict
+                            if direction == SyncDirection.BOTH:
+                                plan.conflicts.append(PlanItem(
+                                    action="conflict",
+                                    path=file_name,
+                                    reason="Modified in both locations",
+                                    local_hash=local_hash,
+                                    remote_hash=remote_file.get('file_hash')
+                                ))
+                            else:
+                                plan.actions.append(PlanItem(
+                                    action="download",
+                                    path=file_name,
+                                    reason="Remote file modified",
+                                    local_hash=local_hash,
+                                    remote_hash=remote_file.get('file_hash')
+                                ))
+        
+        # Handle deletes if prune is enabled
+        if self.config.get("prune_remote_files", True) and direction in (SyncDirection.PUSH, SyncDirection.BOTH):
+            for remote_file in remote_files:
+                norm_path = normalize_unicode_path(remote_file['file_name'])
+                if norm_path not in local_map:
+                    plan.actions.append(PlanItem(
+                        action="delete_remote",
+                        path=remote_file['file_name'],
+                        reason="File deleted locally"
+                    ))
+        
+        # Auto-resolve conflicts if not prompting
+        if plan.conflicts and conflict_strategy != "prompt":
+            for conflict in plan.conflicts[:]:
+                if conflict_strategy == "local-wins":
+                    plan.actions.append(PlanItem(
+                        action="upload",
+                        path=conflict.path,
+                        reason=f"Conflict resolved: {conflict_strategy}",
+                        local_hash=conflict.local_hash,
+                        remote_hash=conflict.remote_hash
+                    ))
+                elif conflict_strategy == "remote-wins":
+                    plan.actions.append(PlanItem(
+                        action="download",
+                        path=conflict.path,
+                        reason=f"Conflict resolved: {conflict_strategy}",
+                        local_hash=conflict.local_hash,
+                        remote_hash=conflict.remote_hash
+                    ))
+                plan.conflicts.remove(conflict)
+        
+        return plan
+    
+    def execute_plan(self, plan: SyncPlan, progress_callback=None, cancel_check=None) -> dict:
+        """Execute the sync plan with progress reporting.
+        
+        Args:
+            plan: The sync plan to execute
+            progress_callback: Optional callback(current, total, message)
+            cancel_check: Optional callable that returns True to cancel
+        
+        Returns:
+            Dictionary with results
+        """
+        results = {
+            "uploaded": 0,
+            "downloaded": 0,
+            "deleted": 0,
+            "errors": [],
+            "cancelled": False
+        }
+        
+        total = plan.total_operations
+        if not total:
+            return results
+        
+        current = 0
+        with tqdm(total=total, desc="Syncing", unit="file", disable=progress_callback is not None) as pbar:
+            for item in plan.actions:
+                # Check for cancellation
+                if cancel_check and cancel_check():
+                    results["cancelled"] = True
+                    if progress_callback:
+                        progress_callback(current, total, "Cancelled")
+                    break
+                
+                try:
+                    if progress_callback:
+                        progress_callback(current, total, f"Processing {item.path}")
+                    
+                    if item.action == "upload":
+                        self._upload_file(item.path)
+                        results["uploaded"] += 1
+                    elif item.action == "download":
+                        self._download_file(item.path)
+                        results["downloaded"] += 1
+                    elif item.action == "delete_remote":
+                        self._delete_remote_file(item.path)
+                        results["deleted"] += 1
+                    
+                    current += 1
+                    if not progress_callback:
+                        pbar.update(1)
+                    time.sleep(self.upload_delay)  # Rate limiting
+                    
+                except Exception as e:
+                    results["errors"].append(f"{item.path}: {str(e)}")
+                    logger.error(f"Error processing {item.path}: {e}")
+        
+        if progress_callback and not results["cancelled"]:
+            progress_callback(total, total, "Complete")
+        
+        return results
+    
+    def _upload_file(self, file_path):
+        """Upload a single file."""
+        full_path = os.path.join(self.local_path, file_path)
+        with open(full_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        if self.compression_algorithm != "none":
+            content = compress_content(content, self.compression_algorithm)
+        
+        self.provider.upload_file(
+            self.active_organization_id,
+            self.active_project_id,
+            file_path,
+            content
+        )
+    
+    def _download_file(self, file_path):
+        """Download a single file."""
+        remote_content = self.provider.get_file_content(
+            self.active_organization_id,
+            self.active_project_id,
+            file_path
+        )
+        
+        if self.compression_algorithm != "none":
+            remote_content = decompress_content(remote_content, self.compression_algorithm)
+        
+        full_path = os.path.join(self.local_path, file_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(remote_content)
+    
+    def _delete_remote_file(self, file_path):
+        """Delete a remote file."""
+        self.provider.delete_file(
+            self.active_organization_id,
+            self.active_project_id,
+            file_path
+        )
 
     def sync(self, local_files, remote_files):
         self.synced_files = {}  # Reset synced files at the start of sync

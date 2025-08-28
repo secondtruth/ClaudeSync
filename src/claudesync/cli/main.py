@@ -1,122 +1,131 @@
-from pathlib import Path
+#!/usr/bin/env python3
+"""
+ClaudeSync v2 CLI - Git-like command structure with full backward compatibility
+"""
+from __future__ import annotations
 import os
-
+import sys
+import json
+import logging
 import click
 import click_completion
-import click_completion.core
-import json
 import subprocess
 import urllib.request
 import importlib.metadata
+from pathlib import Path
 
-from claudesync.cli.chat import chat
 from claudesync.configmanager import FileConfigManager, InMemoryConfigManager
-from claudesync.syncmanager import SyncManager
-from claudesync.utils import (
-    handle_errors,
-    validate_and_get_provider,
-    get_local_files,
-)
-from .auth import auth
-from .organization import organization
-from .project import project
-from .sync import sync, schedule
-from .config import config
-from .conflict import conflict
-from .watch import watch
-from .workspace import workspace
-from .pull import pull
+from claudesync.utils import handle_errors, validate_and_get_provider, get_local_files
 from claudesync.project_instructions import ProjectInstructions
-import logging
 
+# Import existing command modules
+from .auth import auth as auth_module
+from .organization import organization as org_module  
+from .project import project as project_module
+from .sync import sync as sync_module, schedule as schedule_module
+from .config import config as config_module
+from .conflict import conflict as conflict_module
+from .chat import chat as chat_module
+from .watch import watch as watch_module
+from .workspace import workspace as workspace_module
+from .pull import pull as pull_module, push as push_module, schedule as pull_schedule_module
+
+# Setup logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+LOG = logging.getLogger("claudesync.cli")
 
+# Initialize click completion
 click_completion.init()
 
+# Version
+try:
+    __version__ = importlib.metadata.version("claudesync")
+except Exception:
+    __version__ = "0.0.0-dev"
 
-@click.group()
+# ---------- Aliased Group ----------
+class AliasedGroup(click.Group):
+    """A Click Group that supports command aliases and short forms."""
+    def __init__(self, *args, aliases: dict[str, str] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._aliases = aliases or {}
+
+    def get_command(self, ctx, cmd_name):
+        # Direct match
+        cmd = click.Group.get_command(self, ctx, cmd_name)
+        if cmd:
+            return cmd
+        # Alias match
+        target = self._aliases.get(cmd_name)
+        if target:
+            return click.Group.get_command(self, ctx, target)
+        return None
+
+# Common aliases used across groups
+COMMON_ALIASES = {
+    "ls": "list",
+    "rm": "remove",
+    "set_default": "set-default",
+}
+
+# ---------- Root CLI ----------
+CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
+
+@click.group(cls=AliasedGroup, aliases={}, context_settings=CONTEXT_SETTINGS)
 @click.pass_context
 def cli(ctx):
-    """ClaudeSync: Synchronize local files with AI projects.
+    """ClaudeSync: Synchronize local files with Claude.ai projects.
     
-    Use 'csync' to manage your Claude.ai projects from the command line."""
+    Use 'csync' or 'claudesync' to manage your Claude.ai projects from the command line.
+    
+    Common commands:
+      csync auth login         # Authenticate with Claude.ai
+      csync project create     # Create a new project
+      csync sync push          # Upload files to Claude.ai
+      csync sync pull          # Download files from Claude.ai
+      csync sync sync          # Bidirectional synchronization
+    """
     if ctx.obj is None:
-        ctx.obj = FileConfigManager()  # InMemoryConfigManager() for testing with mock
+        ctx.obj = FileConfigManager()  # InMemoryConfigManager() for testing
 
+# ---------- Auth Group (using existing auth module) ----------
+cli.add_command(auth_module, name="auth")
 
-@cli.command()
-@click.argument(
-    "shell", required=False, type=click.Choice(["bash", "zsh", "fish", "powershell"])
-)
-def install_completion(shell):
-    """Install completion for the specified shell."""
-    if shell is None:
-        shell = click_completion.get_auto_shell()
-        click.echo("Shell is set to '%s'" % shell)
-    click_completion.install(shell=shell)
-    click.echo("Completion installed.")
+# ---------- Organization Group (using existing org module with alias) ----------
+cli.add_command(org_module, name="organization")
+cli.add_command(org_module, name="org")  # Alias
 
+# ---------- Project Group (using existing project module) ----------
+cli.add_command(project_module, name="project")
 
-@cli.command()
-@click.pass_context
-def upgrade(ctx):
-    """Upgrade ClaudeSync to the latest version and reset configuration, preserving sessionKey."""
-    current_version = importlib.metadata.version("claudesync")
+# ---------- Sync Group ----------
+@cli.group(cls=AliasedGroup, aliases=COMMON_ALIASES, name="sync")
+def sync_group():
+    """Synchronization commands (push, pull, sync, schedule)."""
+    pass
 
-    # Check for the latest version
-    try:
-        with urllib.request.urlopen(
-            "https://pypi.org/pypi/claudesync/json"
-        ) as response:
-            data = json.loads(response.read())
-            latest_version = data["info"]["version"]
+# Add existing sync commands to sync group
+sync_group.add_command(sync_module, name="sync")
+sync_group.add_command(schedule_module, name="schedule")
+sync_group.add_command(pull_module, name="pull")
+sync_group.add_command(push_module, name="push")
 
-        if current_version == latest_version:
-            click.echo(
-                f"You are already on the latest version of ClaudeSync (v{current_version})."
-            )
-            return
-    except Exception as e:
-        click.echo(f"Unable to check for the latest version: {str(e)}")
-        click.echo("Proceeding with the upgrade process.")
-
-    # Upgrade ClaudeSync
-    click.echo(f"Upgrading ClaudeSync from v{current_version} to v{latest_version}...")
-    try:
-        subprocess.run(["pip", "install", "--upgrade", "claudesync"], check=True)
-        click.echo("ClaudeSync has been successfully upgraded.")
-    except subprocess.CalledProcessError:
-        click.echo(
-            "Failed to upgrade ClaudeSync. Please try manually: pip install --upgrade claudesync"
-        )
-
-    # Inform user about the upgrade process
-    click.echo("\nUpgrade process completed:")
-    click.echo(
-        f"1. ClaudeSync has been upgraded from v{current_version} to v{latest_version}."
-    )
-    click.echo("2. Your session key has been preserved (if it existed and was valid).")
-    click.echo(
-        "\nPlease run 'claudesync auth login' to complete your configuration setup if needed."
-    )
-
-
-@cli.command()
+@sync_group.command(name="push")
 @click.option("--category", help="Specify the file category to sync")
-@click.option(
-    "--uberproject", is_flag=True, help="Include submodules in the parent project sync"
-)
-@click.option(
-    "--dryrun", is_flag=True, default=False, help="Just show what files would be sent"
-)
+@click.option("--uberproject", is_flag=True, help="Include submodules in parent project sync")
+@click.option("--dryrun", is_flag=True, default=False, help="Just show what files would be sent")
+@click.option("--dry-run", is_flag=True, default=False, help="Just show what files would be sent")
 @click.pass_obj
 @handle_errors
-def push(config, category, uberproject, dryrun):
+def sync_push(config, category, uberproject, dryrun, dry_run):
     """Push local files to Claude project (upload only).
     
-    For bi-directional sync, use 'csync sync' instead."""
+    For bidirectional sync, use 'csync sync sync' instead."""
+    # Handle both --dryrun and --dry-run
+    dryrun = dryrun or dry_run
+    
     provider = validate_and_get_provider(config, require_project=True)
 
     if not category:
@@ -132,7 +141,7 @@ def push(config, category, uberproject, dryrun):
     if not local_path:
         click.echo(
             "No .claudesync directory found in this directory or any parent directories. "
-            "Please run 'claudesync project create' or 'claudesync project set' first."
+            "Please run 'csync project create' or 'csync project set' first."
         )
         return
 
@@ -209,7 +218,10 @@ def push(config, category, uberproject, dryrun):
         for submodule in submodules:
             sync_submodule(provider, config, submodule, category)
 
+# Add pull command to sync group
+sync_group.add_command(pull_module, name="pull")
 
+# Helper function for submodule syncing
 def sync_submodule(provider, config, submodule, category):
     submodule_path = Path(config.get_local_path()) / submodule["relative_path"]
     submodule_files = get_local_files(config, str(submodule_path), category)
@@ -238,16 +250,236 @@ def sync_submodule(provider, config, submodule, category):
         f"https://claude.ai/project/{submodule['active_project_id']}"
     )
 
+# ---------- Config Group (using existing config module) ----------
+cli.add_command(config_module, name="config")
 
+# ---------- Conflict Group (using existing conflict module) ----------
+cli.add_command(conflict_module, name="conflict")
+
+# ---------- Chat Group (using existing chat module) ----------
+cli.add_command(chat_module, name="chat")
+
+# ---------- Workspace Group (using existing workspace module) ----------
+cli.add_command(workspace_module, name="workspace")
+
+# ---------- Watch Group (using existing watch module) ----------
+cli.add_command(watch_module, name="watch")
+
+# ---------- GUI Group ----------
+@cli.group(cls=AliasedGroup, aliases=COMMON_ALIASES, name="gui")
+def gui_group():
+    """GUI launcher."""
+    pass
+
+@gui_group.command(name="launch")
+@click.option("--simple", is_flag=True, help="Launch simple GUI")
+@click.option("--debug", is_flag=True, help="Enable debug mode")
+def gui_launch(simple, debug):
+    """Launch the ClaudeSync GUI interface."""
+    try:
+        from claudesync.gui.main import run_gui
+        click.echo("Launching ClaudeSync GUI...")
+        run_gui(simple=simple, debug=debug)
+    except ImportError:
+        click.echo("GUI module not found. Please ensure tkinter is installed.")
+    except Exception as e:
+        click.echo(f"Failed to launch GUI: {str(e)}")
+
+# ---------- Utils Group ----------
+@cli.group(cls=AliasedGroup, aliases=COMMON_ALIASES, name="utils")
+def utils_group():
+    """Utility commands."""
+    pass
+
+@utils_group.command(name="upgrade")
+@click.pass_context
+def utils_upgrade(ctx):
+    """Upgrade ClaudeSync to the latest version."""
+    current_version = __version__
+
+    # Check for the latest version
+    try:
+        with urllib.request.urlopen(
+            "https://pypi.org/pypi/claudesync/json"
+        ) as response:
+            data = json.loads(response.read())
+            latest_version = data["info"]["version"]
+
+        if current_version == latest_version:
+            click.echo(
+                f"You are already on the latest version of ClaudeSync (v{current_version})."
+            )
+            return
+    except Exception as e:
+        click.echo(f"Unable to check for the latest version: {str(e)}")
+        click.echo("Proceeding with the upgrade process.")
+        latest_version = "latest"
+
+    # Upgrade ClaudeSync
+    click.echo(f"Upgrading ClaudeSync from v{current_version} to v{latest_version}...")
+    try:
+        subprocess.run(["pip", "install", "--upgrade", "claudesync"], check=True)
+        click.echo("ClaudeSync has been successfully upgraded.")
+    except subprocess.CalledProcessError:
+        click.echo(
+            "Failed to upgrade ClaudeSync. Please try manually: pip install --upgrade claudesync"
+        )
+
+    # Inform user about the upgrade process
+    click.echo("\nUpgrade process completed:")
+    click.echo(
+        f"1. ClaudeSync has been upgraded from v{current_version} to v{latest_version}."
+    )
+    click.echo("2. Your session key has been preserved (if it existed and was valid).")
+    click.echo(
+        "\nPlease run 'csync auth login' to complete your configuration setup if needed."
+    )
+
+@utils_group.command(name="doctor")
+@click.pass_obj
+def utils_doctor(config):
+    """Run system diagnostics to check ClaudeSync configuration and health."""
+    import platform
+    import shutil
+    from pathlib import Path
+    
+    click.echo("🔍 ClaudeSync System Diagnostics\n")
+    click.echo("=" * 50)
+    
+    # System Information
+    click.echo("\n📊 System Information:")
+    click.echo(f"  • Platform: {platform.system()} {platform.release()}")
+    click.echo(f"  • Python: {platform.python_version()}")
+    click.echo(f"  • ClaudeSync: {__version__}")
+    
+    # Authentication Status
+    click.echo("\n🔐 Authentication:")
+    session_key = config.get_session_key('claude.ai')
+    if session_key:
+        click.echo("  ✅ Session key found")
+        try:
+            from claudesync.provider_factory import get_provider
+            provider = get_provider(config, 'claude.ai')
+            orgs = provider.get_organizations()
+            click.echo(f"  ✅ Access to {len(orgs)} organization(s)")
+        except Exception as e:
+            click.echo(f"  ⚠️ Session validation failed: {str(e)}")
+    else:
+        click.echo("  ❌ No session key found - run 'csync auth login'")
+    
+    # Configuration
+    click.echo("\n⚙️ Configuration:")
+    active_org = config.get("active_organization_id")
+    active_project = config.get("active_project_id")
+    click.echo(f"  • Active Org: {'✅ Set' if active_org else '❌ Not set'}")
+    click.echo(f"  • Active Project: {'✅ Set' if active_project else '❌ Not set'}")
+    
+    # Local Project
+    click.echo("\n📁 Local Project:")
+    local_path = config.get_local_path()
+    if local_path:
+        click.echo(f"  ✅ Project directory: {local_path}")
+        claudesync_dir = Path(local_path) / ".claudesync"
+        if claudesync_dir.exists():
+            click.echo("  ✅ .claudesync directory found")
+        else:
+            click.echo("  ⚠️ .claudesync directory missing")
+    else:
+        click.echo("  ❌ No local project configured")
+    
+    # Dependencies
+    click.echo("\n📦 Dependencies:")
+    deps = ['click', 'click_completion', 'pathspec', 'tqdm', 'sseclient_py']
+    for dep in deps:
+        try:
+            __import__(dep.replace('-', '_'))
+            click.echo(f"  ✅ {dep}")
+        except ImportError:
+            click.echo(f"  ❌ {dep} - missing")
+    
+    # Optional Features
+    click.echo("\n🎯 Optional Features:")
+    try:
+        import tkinter
+        click.echo("  ✅ GUI support (tkinter)")
+    except ImportError:
+        click.echo("  ❌ GUI support (tkinter not installed)")
+    
+    # Commands Available
+    click.echo("\n🛠️ Commands Available:")
+    for cmd_name in ['git', 'pip', 'python3']:
+        if shutil.which(cmd_name):
+            click.echo(f"  ✅ {cmd_name}")
+        else:
+            click.echo(f"  ⚠️ {cmd_name} not found in PATH")
+    
+    click.echo("\n" + "=" * 50)
+    click.echo("Diagnostics complete. Fix any ❌ issues for optimal performance.")
+
+# ---------- Top-level legacy commands for backward compatibility ----------
+
+# Legacy push command (hidden from help)
+@cli.command(name="push", hidden=True)
+@click.option("--category", help="Specify the file category to sync")
+@click.option("--uberproject", is_flag=True, help="Include submodules in parent project sync")
+@click.option("--dryrun", is_flag=True, default=False, help="Just show what files would be sent")
+@click.pass_context
+def legacy_push(ctx, category, uberproject, dryrun):
+    """Legacy push command - redirects to sync push."""
+    # Call the sync push command
+    ctx.invoke(sync_push, category=category, uberproject=uberproject, dryrun=dryrun)
+
+# Legacy pull command (hidden from help)  
+@cli.command(name="pull", hidden=True)
+@click.pass_context
+def legacy_pull(ctx, **kwargs):
+    """Legacy pull command - redirects to sync pull."""
+    # Get the pull command from sync group and invoke it
+    sync_grp = cli.commands.get("sync")
+    if sync_grp:
+        pull_cmd = sync_grp.commands.get("pull")
+        if pull_cmd:
+            ctx.invoke(pull_cmd, **kwargs)
+
+# Legacy schedule command (hidden from help)
+@cli.command(name="schedule", hidden=True)
+@click.pass_context
+def legacy_schedule(ctx, **kwargs):
+    """Legacy schedule command - redirects to sync schedule."""
+    sync_grp = cli.commands.get("sync")
+    if sync_grp:
+        schedule_cmd = sync_grp.commands.get("schedule")
+        if schedule_cmd:
+            ctx.invoke(schedule_cmd, **kwargs)
+
+# Legacy upgrade command (top-level)
+@cli.command(name="upgrade")
+@click.pass_context
+def legacy_upgrade(ctx):
+    """Upgrade ClaudeSync to the latest version."""
+    ctx.invoke(utils_upgrade)
+
+# Install completion command
+@cli.command()
+@click.argument(
+    "shell", required=False, type=click.Choice(["bash", "zsh", "fish", "powershell"])
+)
+def install_completion(shell):
+    """Install completion for the specified shell."""
+    if shell is None:
+        shell = click_completion.get_auto_shell()
+        click.echo("Shell is set to '%s'" % shell)
+    click_completion.install(shell=shell)
+    click.echo("Completion installed.")
+
+# Embedding command
 @cli.command()
 @click.option("--category", help="Specify the file category to sync")
-@click.option(
-    "--uberproject", is_flag=True, help="Include submodules in the parent project sync"
-)
+@click.option("--uberproject", is_flag=True, help="Include submodules in the parent project sync")
 @click.pass_obj
 @handle_errors
 def embedding(config, category, uberproject):
-    """Generate a text embedding from the project. Does not require"""
+    """Generate a text embedding from the project."""
     if not category:
         category = config.get_default_category()
         if category:
@@ -258,7 +490,7 @@ def embedding(config, category, uberproject):
     if not local_path:
         click.echo(
             "No .claudesync directory found in this directory or any parent directories. "
-            "Please run 'claudesync project create' or 'claudesync project set' first."
+            "Please run 'csync project create' or 'csync project set' first."
         )
         return
 
@@ -279,18 +511,9 @@ def embedding(config, category, uberproject):
     output = sync_manager.embedding(local_files)
     click.echo(f"{output}")
 
-
-cli.add_command(auth)
-cli.add_command(organization)
-cli.add_command(project)
-cli.add_command(schedule)
-cli.add_command(sync)
-cli.add_command(config)
-cli.add_command(chat)
-cli.add_command(conflict)
-cli.add_command(watch)
-cli.add_command(workspace)
-cli.add_command(pull)
+def main():
+    """Main entry point supporting both claudesync and csync commands."""
+    cli(prog_name="csync" if "csync" in sys.argv[0] else "claudesync")
 
 if __name__ == "__main__":
-    cli()
+    main()

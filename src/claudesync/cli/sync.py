@@ -1,7 +1,30 @@
 import click
-from ..syncmanager import SyncManager
+from ..syncmanager import SyncManager, SyncDirection
 from ..utils import handle_errors, validate_and_get_provider, get_local_files
 from ..conflict_resolver import ConflictResolver
+
+def _print_plan(plan):
+    """Print sync plan in human-readable format."""
+    if plan.actions:
+        click.echo("\n📋 Planned Actions:")
+        for item in plan.actions:
+            icon = {
+                "upload": "⬆️ ",
+                "download": "⬇️ ",
+                "delete_local": "🗑️ ",
+                "delete_remote": "🗑️ ",
+                "noop": "⏭️ "
+            }.get(item.action, "❓")
+            click.echo(f"  {icon} {item.action.upper()}: {item.path}")
+            click.echo(f"      Reason: {item.reason}")
+    
+    if plan.conflicts:
+        click.echo("\n⚠️  Conflicts:")
+        for conflict in plan.conflicts:
+            click.echo(f"  ⚔️  {conflict.path}")
+            click.echo(f"      {conflict.reason}")
+            
+    click.echo(f"\nTotal operations: {plan.total_operations}")
 
 @click.command()
 @click.option("--conflict-strategy", 
@@ -11,15 +34,24 @@ from ..conflict_resolver import ConflictResolver
 @click.option("--dry-run", is_flag=True, help="Preview changes without syncing")
 @click.option("--no-pull", is_flag=True, help="Skip pulling remote changes (upload only)")
 @click.option("--no-push", is_flag=True, help="Skip pushing local changes (download only)")
+@click.option("--category", help="Specify the file category to sync")
+@click.option("--uberproject", is_flag=True, help="Include submodules in parent project sync")
 @click.pass_obj
 @handle_errors
-def sync(config, conflict_strategy, dry_run, no_pull, no_push):
+def sync(config, conflict_strategy, dry_run, no_pull, no_push, category, uberproject):
     """Synchronize local and remote files (bi-directional sync)."""
-    provider = validate_and_get_provider(config, require_project=True)
-    
+    # Determine sync direction
     if no_pull and no_push:
         click.echo("Error: Cannot use both --no-pull and --no-push")
         return
+    
+    direction = (
+        SyncDirection.PUSH if no_pull and not no_push else
+        SyncDirection.PULL if no_push and not no_pull else
+        SyncDirection.BOTH
+    )
+    
+    provider = validate_and_get_provider(config, require_project=True)
     
     active_organization_id = config.get("active_organization_id")
     active_project_id = config.get("active_project_id")
@@ -30,23 +62,59 @@ def sync(config, conflict_strategy, dry_run, no_pull, no_push):
         click.echo("No .claudesync directory found. Run 'csync project create' first.")
         return
     
-    click.echo(f"Syncing project '{active_project_name}'...")
+    click.echo(f"Syncing project '{active_project_name}' ({direction.value})...")
+    if category:
+        click.echo(f"Using category: {category}")
+    if uberproject:
+        click.echo("Including submodules in sync")
     
     # Get files
-    local_files = get_local_files(config, local_path)
+    local_files = get_local_files(config, local_path, category=category, include_submodules=uberproject)
     remote_files = provider.list_files(active_organization_id, active_project_id)
     
+    # Initialize sync manager
+    sync_manager = SyncManager(provider, config, local_path)
+    
+    # Build sync plan
+    plan = sync_manager.build_plan(
+        direction=direction,
+        dry_run=dry_run,
+        conflict_strategy=conflict_strategy,
+        local_files=local_files,
+        remote_files=remote_files
+    )
+    
+    # Handle dry run
     if dry_run:
-        click.echo("\nDry run - changes that would be made:")
+        _print_plan(plan)
+        return
+    
+    # Handle conflicts with prompt strategy
+    if plan.conflicts and conflict_strategy == 'prompt':
+        click.echo(f"\n⚠️  {len(plan.conflicts)} conflict(s) detected!")
+        _print_plan(plan)
+        if not click.confirm("Continue sync anyway?"):
+            raise click.Abort()
+    
+    # Execute plan
+    if plan.total_operations > 0:
+        results = sync_manager.execute_plan(plan)
         
-        # Show files to upload
-        if not no_push:
-            remote_file_names = {f['file_name'] for f in remote_files}
-            files_to_upload = [f for f in local_files if f not in remote_file_names]
-            if files_to_upload:
-                click.echo("\nFiles to upload:")
-                for f in files_to_upload:
-                    click.echo(f"  [UPLOAD] {f}")
+        # Print results
+        click.echo("\n✅ Sync Complete:")
+        if results["uploaded"]:
+            click.echo(f"  ⬆️  Uploaded: {results['uploaded']} files")
+        if results["downloaded"]:
+            click.echo(f"  ⬇️  Downloaded: {results['downloaded']} files")
+        if results["deleted"]:
+            click.echo(f"  🗑️  Deleted: {results['deleted']} files")
+        
+        if results["errors"]:
+            click.echo(f"\n❌ Errors ({len(results['errors'])}):")
+            for error in results["errors"][:5]:  # Show first 5 errors
+                click.echo(f"  - {error}")
+    else:
+        click.echo("✅ Everything is up to date!")
         
         # Show files to download
         if not no_pull:

@@ -74,45 +74,107 @@ class WorkspaceManager:
             'files_to_delete_remote': 0,
             'files_to_delete_local': 0,
             'instructions_status': None,
+            'instructions_to_update': 0,
             'conflicts_detected': 0
         }
         
         try:
-            # Run csync in analysis mode (we'll need a dry-run that outputs JSON)
-            # For now, simulate the analysis
+            # Change to project directory and get actual sync manager
             project_path = project['path']
+            old_dir = os.getcwd()
+            os.chdir(project_path)
             
-            # Check for local files
+            # Import here to avoid circular imports
+            from claudesync.configmanager.file_config_manager import FileConfigManager
+            from claudesync.provider_factory import get_provider
+            from claudesync.syncmanager import SyncManager
+            
+            try:
+                # Initialize config and provider
+                config = FileConfigManager()
+                
+                # Get provider
+                provider = get_provider(config, config.get('active_provider'))
+                
+                # Create sync manager
+                sync_manager = SyncManager(provider, config, config.get('local_path'))
+                
+                # Get local files
+                local_files = sync_manager.get_local_files()
+                
+                # Get remote files  
+                remote_files = sync_manager.get_remote_files()
+                
+                # Calculate actual changes
+                local_checksums = {f: sync_manager.get_file_checksum(f) for f in local_files}
+                remote_checksums = {f['file_name']: f.get('checksum', '') for f in remote_files}
+                
+                # Files to push (new or modified locally)
+                for local_file in local_files:
+                    remote_checksum = remote_checksums.get(local_file, None)
+                    if remote_checksum is None or local_checksums[local_file] != remote_checksum:
+                        stats['files_to_push'] += 1
+                
+                # Files to pull (new or modified remotely)
+                for remote_file in remote_files:
+                    file_name = remote_file['file_name']
+                    local_checksum = local_checksums.get(file_name, None)
+                    remote_checksum = remote_file.get('checksum', '')
+                    if local_checksum is None or local_checksum != remote_checksum:
+                        stats['files_to_pull'] += 1
+                
+                # Files to delete
+                if sync_options.get('prune_remote', True):
+                    for remote_file in remote_files:
+                        if remote_file['file_name'] not in local_files:
+                            stats['files_to_delete_remote'] += 1
+                
+                if sync_options.get('prune_local', False) and not sync_options.get('one_way', True):
+                    for local_file in local_files:
+                        if local_file not in remote_checksums:
+                            stats['files_to_delete_local'] += 1
+                
+                # Check for project instructions
+                instructions_file = os.path.join(project_path, 'project-instructions.md')
+                old_instructions_file = os.path.join(project_path, '.projectinstructions')
+                
+                if os.path.exists(instructions_file):
+                    stats['instructions_status'] = 'Will update'
+                    stats['instructions_to_update'] = 1
+                elif os.path.exists(old_instructions_file):
+                    stats['instructions_status'] = 'Will rename and update'
+                    stats['instructions_to_update'] = 1
+                elif sync_options.get('with_instructions'):
+                    stats['instructions_status'] = 'Will create'
+                    stats['instructions_to_update'] = 1
+                
+                # Detect conflicts (files modified both locally and remotely)
+                for local_file in local_files:
+                    if local_file in remote_checksums:
+                        if (local_checksums[local_file] != remote_checksums[local_file] and
+                            local_checksums[local_file] and remote_checksums[local_file]):
+                            # Both have different non-empty checksums
+                            stats['conflicts_detected'] += 1
+                            
+            finally:
+                os.chdir(old_dir)
+                
+        except Exception as e:
+            # If analysis fails, use estimates as fallback
+            import click
+            click.echo(f"  ⚠️  Could not analyze {project.get('name', 'Unknown')}: {str(e)}")
+            
+            # Basic file counting as fallback
             local_files = []
             for root, dirs, files in os.walk(project_path):
-                # Skip .claudesync and other ignored directories
                 dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules']
-                
                 for file in files:
                     if not file.startswith('.'):
                         local_files.append(os.path.join(root, file))
             
-            # Estimate changes (this is simplified - real implementation would query API)
             stats['files_to_push'] = len(local_files)
             
-            # Check for project instructions
-            instructions_file = os.path.join(project_path, 'project-instructions.md')
-            old_instructions_file = os.path.join(project_path, '.projectinstructions')
-            
-            if os.path.exists(instructions_file):
-                stats['instructions_status'] = 'Will update'
-            elif os.path.exists(old_instructions_file):
-                stats['instructions_status'] = 'Will rename and update'
-            elif sync_options.get('with_instructions'):
-                stats['instructions_status'] = 'Will create'
-            
-            # For actual implementation, would need to:
-            # 1. Query remote files via API
-            # 2. Compare checksums
-            # 3. Detect actual conflicts
-            # 4. Count actual changes
-            
-            # Simplified estimation
+            # Use conservative estimates for other values
             if sync_options.get('pull_only'):
                 stats['files_to_push'] = 0
                 stats['files_to_pull'] = 5  # Estimate
@@ -121,14 +183,8 @@ class WorkspaceManager:
             else:
                 stats['files_to_pull'] = 2  # Estimate
             
-            if not sync_options.get('prune_remote'):
-                stats['files_to_delete_remote'] = 0
-            else:
+            if sync_options.get('prune_remote', True):
                 stats['files_to_delete_remote'] = 1  # Estimate
-                
-        except Exception as e:
-            # If analysis fails, return zeros
-            pass
         
         return stats
     

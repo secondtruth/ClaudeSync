@@ -1,115 +1,84 @@
 import click
-import os
-from ..syncmanager import SyncManager
-from ..utils import handle_errors, validate_and_get_provider, get_local_files
-from ..conflict_resolver import ConflictResolver
 
 @click.command()
 @click.option("-l", "--local-path", default=".", help="The local directory to pull to.")
 @click.option("--dry-run", is_flag=True, help="Show what would be pulled without making changes.")
 @click.option("--force", is_flag=True, help="Force pull, overwriting local changes.")
 @click.option("--merge", is_flag=True, help="Merge remote changes with local (detect conflicts).")
+@click.pass_context
+def pull(ctx, local_path, dry_run, force, merge):
+    """Pull files from Claude project to local directory (download only).
+    
+    This is a convenience wrapper for 'csync sync --no-push'.
+    """
+    # Map force/merge to conflict strategy
+    conflict_strategy = 'remote-wins' if force else ('prompt' if merge else 'prompt')
+    
+    # Redirect to sync with PULL direction (no-push flag)
+    from .sync import sync
+    return ctx.invoke(
+        sync,
+        conflict_strategy=conflict_strategy,
+        dry_run=dry_run,
+        no_pull=False,
+        no_push=True  # This makes it PULL only
+    )
+
+@click.command()
+@click.option('--category', help='Specify the file category to sync')
+@click.option('--uberproject', is_flag=True, help='Include submodules in parent project sync')
+@click.option('--dryrun', is_flag=True, default=False, help='Just show what files would be sent')
+@click.pass_context
+def push(ctx, category, uberproject, dryrun):
+    """Push files to Claude project (upload only).
+    
+    This is a convenience wrapper for 'csync sync --no-pull'.
+    """
+    from .sync import sync
+    return ctx.invoke(
+        sync,
+        conflict_strategy='local-wins',
+        dry_run=dryrun,
+        no_pull=True,  # This makes it PUSH only
+        no_push=False,
+        category=category,
+        uberproject=uberproject
+    )
+
+@click.command()
+@click.option('--interval', type=int, default=5, help='Sync interval in minutes')
+@click.option('--remove', is_flag=True, help='Remove scheduled sync')
 @click.pass_obj
-@handle_errors
-def pull(config, local_path, dry_run, force, merge):
-    """Pull files from Claude project to local directory (download only)."""
-    provider = validate_and_get_provider(config, require_project=True)
+def schedule(config, interval, remove):
+    """Schedule automatic sync at regular intervals."""
+    import platform
+    import subprocess
     
-    active_organization_id = config.get("active_organization_id")
-    active_project_id = config.get("active_project_id")
-    active_project_name = config.get("active_project_name")
-    
-    # Get the local path
-    if local_path == ".":
-        local_path = config.get_local_path()
-        if not local_path:
-            click.echo(
-                "No .claudesync directory found. "
-                "Please run 'csync project create' or 'csync project set' first."
-            )
-            return
-    
-    click.echo(f"Pulling from project '{active_project_name}'...")
-    
-    # Get remote files
-    remote_files = provider.list_files(active_organization_id, active_project_id)
-    
-    if dry_run:
-        click.echo("\nDry run - would pull the following files:")
-        for remote_file in remote_files:
-            file_name = remote_file['file_name']
-            local_file_path = os.path.join(local_path, file_name)
-            if os.path.exists(local_file_path):
-                click.echo(f"  [UPDATE] {file_name}")
-            else:
-                click.echo(f"  [NEW]    {file_name}")
+    if remove:
+        click.echo("Removing scheduled sync...")
+        if platform.system() == "Windows":
+            subprocess.run(["schtasks", "/Delete", "/TN", "ClaudeSync", "/F"])
+        else:
+            from python_crontab import CronTab
+            cron = CronTab(user=True)
+            cron.remove_all(comment='ClaudeSync')
+            cron.write()
+        click.echo("✅ Scheduled sync removed")
         return
     
-    # Handle conflicts if merge mode
-    if merge and not force:
-        local_files = get_local_files(config, local_path)
-        resolver = ConflictResolver(config)
-        conflicts = resolver.detect_conflicts(local_files, remote_files)
-        
-        if conflicts:
-            click.echo(f"\n⚠️  {len(conflicts)} conflict(s) detected!")
-            for conflict in conflicts:
-                click.echo(f"  - {conflict['file_name']}")
-            
-            if not click.confirm("\nResolve conflicts interactively?"):
-                click.echo("Pull cancelled. Use --force to overwrite local changes.")
-                return
-            
-            # Resolve each conflict
-            for conflict in conflicts:
-                resolved = resolver.resolve_conflict(conflict, strategy='prompt')
-                if resolved:
-                    with open(conflict['local_path'], 'w', encoding='utf-8') as f:
-                        f.write(resolved)
+    click.echo(f"Setting up sync every {interval} minutes...")
     
-    # Create a temporary sync manager for pull operations
-    sync_manager = SyncManager(provider, config, local_path)
+    if platform.system() == "Windows":
+        # Windows Task Scheduler
+        cmd = f'schtasks /Create /SC MINUTE /MO {interval} /TN "ClaudeSync" /TR "csync sync" /F'
+        subprocess.run(cmd, shell=True)
+    else:
+        # Unix cron
+        from python_crontab import CronTab
+        cron = CronTab(user=True)
+        cron.remove_all(comment='ClaudeSync')
+        job = cron.new(command='csync sync', comment='ClaudeSync')
+        job.minute.every(interval)
+        cron.write()
     
-    # Pull project instructions first (always pull these)
-    sync_manager._pull_project_instructions(remote_files)
-    
-    # Temporarily enable two-way sync for pull
-    original_two_way = config.get("two_way_sync", False)
-    config.set("two_way_sync", True, local=True)
-    
-    # Pull files (only remote to local)
-    pulled_files = 0
-    updated_files = 0
-    
-    try:
-        for remote_file in remote_files:
-            file_name = remote_file['file_name']
-            local_file_path = os.path.join(local_path, file_name)
-            
-            # Check if file exists locally
-            exists_locally = os.path.exists(local_file_path)
-            
-            if exists_locally and not force and not merge:
-                # Skip if file exists and not forcing
-                click.echo(f"  [SKIP]   {file_name} (use --force to overwrite)")
-                continue
-            
-            # Create directory if needed
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-            
-            # Write file
-            with open(local_file_path, 'w', encoding='utf-8') as f:
-                f.write(remote_file.get('content', ''))
-            
-            if exists_locally:
-                updated_files += 1
-                click.echo(f"  [UPDATE] {file_name}")
-            else:
-                pulled_files += 1
-                click.echo(f"  [NEW]    {file_name}")
-    
-    finally:
-        # Restore original two-way sync setting
-        config.set("two_way_sync", original_two_way, local=True)
-    
-    click.echo(f"\n✓ Pull complete: {pulled_files} new, {updated_files} updated")
+    click.echo(f"✅ Scheduled sync every {interval} minutes")

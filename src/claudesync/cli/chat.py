@@ -394,3 +394,69 @@ def get_default_project(
             default_project = idx
             break
     return default_project
+
+
+@chat.command()
+@click.option("--format", "fmt", type=click.Choice(["md", "json"]), default="md",
+              help="Export format (markdown or JSON)")
+@click.option("--output", type=click.Path(), help="Output file path")
+@click.option("--all", "export_all", is_flag=True, help="Export all chats in organization")
+@click.pass_obj
+@handle_errors
+def export(config, fmt, output, export_all):
+    """Export chat conversations to markdown or JSON format."""
+    provider = validate_and_get_provider(config, require_project=not export_all)
+    active_organization_id = config.get("active_organization_id")
+    
+    # Get chats to export
+    if export_all:
+        chats = provider.get_all_chats(active_organization_id)
+        click.echo(f"Exporting {len(chats)} chats...")
+    else:
+        # Export current project's chats
+        active_project_id = config.get("active_project_id")
+        chats = [c for c in provider.get_all_chats(active_organization_id) 
+                 if c.get('project_uuid') == active_project_id]
+        click.echo(f"Exporting {len(chats)} chats from current project...")
+    
+    if not chats:
+        click.echo("No chats found to export.")
+        return
+    
+    # Format the export
+    if fmt == "json":
+        import json
+        export_data = {"chats": chats, "exported_at": str(datetime.datetime.now())}
+        content = json.dumps(export_data, indent=2)
+        extension = ".json"
+    else:  # markdown
+        content = "# Claude.ai Chat Export\n\n"
+        content += f"Exported: {datetime.datetime.now()}\n"
+        content += f"Total Chats: {len(chats)}\n\n"
+        
+        for chat in chats:
+            content += f"## {chat.get('name', 'Untitled Chat')}\n"
+            content += f"- ID: {chat.get('uuid')}\n"
+            content += f"- Created: {chat.get('created_at')}\n"
+            content += f"- Project: {chat.get('project_uuid')}\n\n"
+            
+            # Add messages if available
+            if 'messages' in chat:
+                for msg in chat['messages']:
+                    role = msg.get('sender', 'unknown')
+                    text = msg.get('text', '')
+                    content += f"**{role}:** {text}\n\n"
+            content += "---\n\n"
+        extension = ".md"
+    
+    # Save to file
+    if output:
+        output_path = output
+    else:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = f"claude_export_{timestamp}{extension}"
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    click.echo(f"✓ Exported {len(chats)} chats to {output_path}")

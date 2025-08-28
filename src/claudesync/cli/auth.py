@@ -1,4 +1,5 @@
 import click
+import datetime
 
 from claudesync.provider_factory import get_provider
 from ..exceptions import ProviderError
@@ -148,6 +149,38 @@ def quick(ctx):
         config.set_session_key('claude.ai', session_key, expires)
         
         click.echo(click.style("\n✓ Successfully authenticated with Claude.ai!", fg='green', bold=True))
+        
+@auth.command()
+@click.pass_context
+@handle_errors  
+def refresh(ctx):
+    """Refresh authentication session without full re-login."""
+    config = ctx.obj
+    
+    # Check for existing session key
+    session_key = config.get_session_key('claude.ai')
+    if not session_key:
+        click.echo("No active session found. Please run 'csync auth login' first.")
+        return
+        
+    # Try to refresh by testing the session
+    provider_instance = get_provider(config, 'claude.ai')
+    
+    try:
+        # Test the session by getting organizations
+        orgs = provider_instance.get_organizations()
+        
+        # Update expiry to 30 days from now
+        expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
+        config.set_session_key('claude.ai', session_key, expires)
+        
+        click.echo(f"✓ Session refreshed successfully!")
+        if orgs:
+            click.echo(f"✓ Access verified to {len(orgs)} organization(s)")
+            
+    except Exception as e:
+        click.echo(f"✗ Session refresh failed: {str(e)}")
+        click.echo("\nSession may have expired. Please run 'csync auth login' to re-authenticate.")
         
         # Test by getting organizations
         try:

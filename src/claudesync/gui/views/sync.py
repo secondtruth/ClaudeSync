@@ -302,6 +302,10 @@ class SyncView:
     
     def cancel_sync(self):
         """Cancel the sync operation"""
-        # TODO: Implement proper cancellation
+        if hasattr(self, 'sync_thread') and self.sync_thread and self.sync_thread.is_alive():
+            # Set cancel flag if sync manager supports it
+            self.cancel_requested = True
+            self.output_queue.put(("info", "Cancellation requested..."))
+            # Note: Actual cancellation depends on sync_thread checking self.cancel_requested
         self.output_queue.put(("error", "Sync cancelled by user"))
         self.output_queue.put(("done", None))
