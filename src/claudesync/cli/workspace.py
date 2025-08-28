@@ -367,6 +367,10 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, no_prune_local, one
                         click.echo(f"  ... and {len(new_remote_projects) - 5} more")
                     
                     if not dry_run and click.confirm("\nClone new remote projects before syncing?"):
+                        # Initialize global workspace config
+                        from claudesync.global_workspace_config import GlobalWorkspaceConfig
+                        global_config = GlobalWorkspaceConfig(ws_config.get_workspace_root() or os.getcwd())
+                        
                         # Clone the new projects
                         workspace_root = ws_config.get_workspace_root() or os.getcwd()
                         cloned = 0
@@ -383,20 +387,14 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, no_prune_local, one
                             if not os.path.exists(project_path):
                                 try:
                                     os.makedirs(project_path, exist_ok=True)
-                                    claudesync_dir = os.path.join(project_path, '.claudesync')
-                                    os.makedirs(claudesync_dir, exist_ok=True)
                                     
-                                    local_config = {
-                                        "active_provider": "claude.ai",
-                                        "local_path": project_path,
-                                        "active_organization_id": organization_id,
-                                        "active_project_id": project_id,
-                                        "active_project_name": project_name
-                                    }
-                                    
-                                    config_file = os.path.join(claudesync_dir, 'config.local.json')
-                                    with open(config_file, 'w', encoding='utf-8') as f:
-                                        json.dump(local_config, f, indent=2, ensure_ascii=False)
+                                    # Add to global workspace config instead of creating .claudesync
+                                    global_config.add_project(
+                                        project_name=project_name,
+                                        project_id=project_id,
+                                        local_path=project_path,
+                                        organization_id=organization_id
+                                    )
                                     
                                     click.echo(f"  ✓ Cloned: {project_name}")
                                     
@@ -415,8 +413,8 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, no_prune_local, one
                                                 # Create directory if needed
                                                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
                                                 
-                                                # Download file content
-                                                content = provider.get_file(organization_id, project_id, remote_file.get('uuid', remote_file.get('id')))
+                                                # Get content from the remote_file directly
+                                                content = remote_file.get('content', '')
                                                 with open(file_path, 'w', encoding='utf-8') as f:
                                                     f.write(content)
                                             click.echo(f"    ✓ Files pulled successfully")
@@ -838,3 +836,89 @@ def watchers(config, stop, start):
         results = manager.start_watchers(projects)
         started = sum(1 for r in results if r['status'] == 'started')
         click.echo(f"Started {started} watcher(s)")
+
+@workspace.command()
+@click.option('--remove-old', is_flag=True, help='Remove old .claudesync directories after migration')
+@click.option('--dry-run', is_flag=True, help='Preview migration without making changes')
+@click.pass_obj
+@handle_errors
+def migrate(config, remove_old, dry_run):
+    """Migrate from individual .claudesync directories to global workspace config."""
+    from claudesync.global_workspace_config import GlobalWorkspaceConfig
+    
+    ws_config = WorkspaceConfig()
+    workspace_root = ws_config.get_workspace_root() or os.getcwd()
+    
+    # Initialize global config
+    global_config = GlobalWorkspaceConfig(workspace_root)
+    
+    # Set global organization and session if available
+    if config.get('active_organization_id'):
+        global_config.set_global_setting('active_organization_id', config.get('active_organization_id'))
+    if config.get('session_key'):
+        global_config.set_global_setting('session_key', config.get('session_key'))
+    
+    click.echo(f"Scanning {workspace_root} for projects to migrate...")
+    
+    if dry_run:
+        click.echo("\nDRY RUN - No changes will be made")
+    
+    # Find and migrate projects
+    projects_found = 0
+    projects_migrated = 0
+    
+    for root, dirs, files in os.walk(workspace_root):
+        if '.claudesync' in dirs:
+            claudesync_dir = os.path.join(root, '.claudesync')
+            config_file = os.path.join(claudesync_dir, 'config.local.json')
+            
+            if os.path.exists(config_file):
+                projects_found += 1
+                try:
+                    with open(config_file, 'r', encoding='utf-8') as f:
+                        local_config = json.load(f)
+                    
+                    project_name = local_config.get('active_project_name', os.path.basename(root))
+                    project_id = local_config.get('active_project_id')
+                    org_id = local_config.get('active_organization_id')
+                    
+                    click.echo(f"\n  Found: {project_name}")
+                    click.echo(f"    Path: {root}")
+                    click.echo(f"    ID: {project_id}")
+                    
+                    if project_id and not dry_run:
+                        global_config.add_project(
+                            project_name=project_name,
+                            project_id=project_id,
+                            local_path=root,
+                            organization_id=org_id
+                        )
+                        projects_migrated += 1
+                        click.echo(f"    ✓ Migrated to global config")
+                        
+                        if remove_old:
+                            import shutil
+                            shutil.rmtree(claudesync_dir)
+                            click.echo(f"    ✓ Removed old .claudesync directory")
+                    
+                except Exception as e:
+                    click.echo(f"    ✗ Failed to migrate: {str(e)}")
+            
+            # Don't descend into project directories
+            dirs.clear()
+    
+    # Summary
+    click.echo(f"\n{'='*60}")
+    click.echo(f"Migration Summary:")
+    click.echo(f"  Projects found: {projects_found}")
+    if not dry_run:
+        click.echo(f"  Projects migrated: {projects_migrated}")
+        click.echo(f"  Global config saved to: {global_config.config_file}")
+    else:
+        click.echo(f"  Would migrate: {projects_found} project(s)")
+        click.echo(f"  Would save to: {os.path.join(workspace_root, '.claudesync-workspace.json')}")
+    
+    if not dry_run and projects_migrated > 0:
+        click.echo(f"\n✓ Migration complete! Your workspace now uses a single global config.")
+        click.echo(f"  View config: cat '{global_config.config_file}'")
+        click.echo(f"  All projects: csync workspace list")

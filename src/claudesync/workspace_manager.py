@@ -99,15 +99,20 @@ class WorkspaceManager:
                 # Create sync manager
                 sync_manager = SyncManager(provider, config, config.get('local_path'))
                 
-                # Get local files
-                local_files = sync_manager.get_local_files()
+                # Get local files (using utils function, not sync_manager)
+                from claudesync.utils import get_local_files
+                local_files = get_local_files(config, config.get('local_path'))
                 
                 # Get remote files  
-                remote_files = sync_manager.get_remote_files()
+                org_id = config.get("active_organization_id")
+                proj_id = config.get("active_project_id")
+                remote_files = provider.list_files(org_id, proj_id) if provider and org_id and proj_id else []
                 
                 # Calculate actual changes
-                local_checksums = {f: sync_manager.get_file_checksum(f) for f in local_files}
-                remote_checksums = {f['file_name']: f.get('checksum', '') for f in remote_files}
+                from claudesync.utils import compute_md5_hash
+                local_path = config.get('local_path')
+                local_checksums = {f: compute_md5_hash(os.path.join(local_path, f)) for f in local_files}
+                remote_checksums = {f['file_name']: f.get('file_hash', '') for f in remote_files}
                 
                 # Files to push (new or modified locally)
                 for local_file in local_files:
@@ -119,7 +124,7 @@ class WorkspaceManager:
                 for remote_file in remote_files:
                     file_name = remote_file['file_name']
                     local_checksum = local_checksums.get(file_name, None)
-                    remote_checksum = remote_file.get('checksum', '')
+                    remote_checksum = remote_file.get('file_hash', '')
                     if local_checksum is None or local_checksum != remote_checksum:
                         stats['files_to_pull'] += 1
                 
@@ -310,7 +315,7 @@ class WorkspaceManager:
                         logger.debug(f"Instructions pull failed for {project['name']}: {instructions_result.stderr}")
                 
                 # Then do regular pull
-                cmd.append('pull')
+                cmd.extend(['sync', 'pull'])
                 if sync_options.get('conflict_strategy') == 'local-wins':
                     cmd.append('--merge')
                 elif sync_options.get('conflict_strategy') == 'remote-wins':
@@ -334,7 +339,7 @@ class WorkspaceManager:
                             logger.debug(f"Instructions push failed for {project['name']}: {instructions_result.stderr}")
                 
                 # Then do regular push
-                cmd.append('push')
+                cmd.extend(['sync', 'push'])
             else:
                 # TRUE BIDIRECTIONAL SYNC - always use the sync command with two_way_sync enabled
                 
@@ -353,8 +358,8 @@ class WorkspaceManager:
                     if instructions_result.returncode != 0:
                         logger.debug(f"Instructions sync failed for {project['name']}: {instructions_result.stderr}")
                 
-                # Step 2: Use the sync command for true bidirectional sync
-                cmd.append('sync')
+                # Step 2: Use the sync sync command for true bidirectional sync
+                cmd.extend(['sync', 'sync'])
                 cmd.extend(['--conflict-strategy', sync_options.get('conflict_strategy', 'prompt')])
                 
                 # Note: With two_way_sync enabled in config, the sync command will:
