@@ -235,6 +235,19 @@ class BaseClaudeAIProvider(BaseProvider):
             "POST", f"/organizations/{organization_id}/projects", data
         )
 
+    def get_project_instructions(self, organization_id, project_id):
+        """Get project system instructions (prompt template)."""
+        return self._make_request(
+            "GET", f"/organizations/{organization_id}/projects/{project_id}/prompt_template"
+        )
+
+    def update_project_instructions(self, organization_id, project_id, instructions):
+        """Update project system instructions (prompt template)."""
+        data = {"template": instructions}
+        return self._make_request(
+            "PUT", f"/organizations/{organization_id}/projects/{project_id}/prompt_template", data
+        )
+
     def get_chat_conversations(self, organization_id):
         return self._make_request(
             "GET", f"/organizations/{organization_id}/chat_conversations"
