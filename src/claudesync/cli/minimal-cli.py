@@ -106,6 +106,18 @@ def workspace():
     pass
 
 
+@cli.command()
+def gui():
+    """Launch ClaudeSync GUI system tray application."""
+    try:
+        from claudesync.gui.systray import main
+        main()
+    except ImportError as e:
+        click.echo(f"X GUI requires PyQt6: {e}")
+        click.echo("Install with: pip install PyQt6")
+        sys.exit(1)
+
+
 @workspace.command()
 @click.argument('path', type=click.Path(), default='.')
 def init(path):
@@ -134,7 +146,11 @@ def init(path):
 
 @workspace.command()
 @click.option('--dry-run', is_flag=True, help='Show what would be synced without doing it')
-def sync(dry_run):
+@click.option('--bidirectional', is_flag=True, help='Also upload local changes to Claude.ai')
+@click.option('--chats', is_flag=True, help='Also sync chat conversations')
+@click.option('--conflict', type=click.Choice(['remote', 'local', 'newer']), default='remote',
+              help='How to resolve conflicts (default: remote)')
+def sync(dry_run, bidirectional, chats, conflict):
     """Sync ALL Claude.ai projects to workspace folders."""
     # Load workspace config
     config_file = Path.home() / ".claudesync" / "workspace.json"
@@ -158,14 +174,26 @@ def sync(dry_run):
     # Run sync
     click.echo(f"Syncing workspace: {workspace_root}\n")
     
-    stats = syncer.sync_all(dry_run=dry_run)
-    
+    stats = syncer.sync_all(
+        dry_run=dry_run,
+        bidirectional=bidirectional,
+        sync_chats=chats,
+        conflict_strategy=conflict
+    )
+
     # Show results
     click.echo(f"\nOK Sync complete!")
     click.echo(f"  - Created: {stats['created']} projects")
     click.echo(f"  - Updated: {stats['updated']} projects")
     click.echo(f"  - Skipped: {stats['skipped']} projects")
-    
+
+    if bidirectional:
+        click.echo(f"  - Uploaded: {stats.get('uploaded', 0)} files")
+        click.echo(f"  - Conflicts: {stats.get('conflicts', 0)} resolved")
+
+    if chats:
+        click.echo(f"  - Chats: {stats.get('chats', 0)} synced")
+
     if stats['errors'] > 0:
         click.echo(f"  - ! Errors: {stats['errors']} projects")
 
