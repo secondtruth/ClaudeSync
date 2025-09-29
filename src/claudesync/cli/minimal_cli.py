@@ -32,7 +32,40 @@ def get_provider_with_auth():
 @click.group(invoke_without_command=False)
 @click.version_option()
 def cli():
-    """ClaudeSync - Workspace-wide sync for ALL Claude.ai projects."""
+    """ClaudeSync - Workspace-wide sync for ALL Claude.ai projects.
+
+    \b
+    AUTHENTICATION:
+      csync auth login --session-key <key>  Login with Claude.ai session key
+      csync auth logout                     Logout from Claude.ai
+      csync auth status                     Check authentication status
+
+    \b
+    WORKSPACE MANAGEMENT:
+      csync workspace init <path>           Initialize workspace directory
+      csync workspace sync                  Sync all projects (download only)
+          --bidirectional                   Enable two-way sync
+          --chats                           Include chat conversations
+          --conflict <strategy>             Conflict resolution (remote/local/newer)
+          --dry-run                         Preview changes without syncing
+      csync workspace status                Show workspace sync status
+
+    \b
+    GUI:
+      csync gui                             Launch system tray application
+
+    \b
+    QUICK START:
+      1. csync auth login --session-key sk-ant-...
+      2. csync workspace init ~/ClaudeProjects
+      3. csync workspace sync
+
+    \b
+    EXAMPLES:
+      csync workspace sync --bidirectional --chats
+      csync workspace sync --conflict newer --dry-run
+      csync gui  # Launch system tray for background sync
+    """
     pass
 
 
