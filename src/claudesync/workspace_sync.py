@@ -202,10 +202,14 @@ class WorkspaceSync:
             if not remote_files:
                 return "skipped"
 
-            # Download all files (AGENTS.md already handled above)
+            # Create context folder for knowledge files
+            context_path = folder_path / "context"
+            context_path.mkdir(exist_ok=True)
+
+            # Download all files to context folder (AGENTS.md already handled above)
             for remote_file in remote_files:
-                file_path = folder_path / remote_file['file_name']
-                
+                file_path = context_path / remote_file['file_name']
+
                 # Skip if local file matches remote
                 if file_path.exists():
                     with open(file_path, 'r', encoding='utf-8') as f:
@@ -215,10 +219,10 @@ class WorkspaceSync:
                     # Get remote content (already included in list_files response)
                     remote_content = remote_file['content']
                     remote_hash = compute_md5_hash(remote_content)
-                    
+
                     if local_hash == remote_hash:
                         continue
-                
+
                 # Download file (content already available from list_files)
                 content = remote_file['content']
 
@@ -265,38 +269,40 @@ class WorkspaceSync:
         """Upload local files to Claude.ai project."""
         stats = {"uploaded": 0, "conflicts": 0}
 
-        # Get local files (excluding special folders/files)
+        # Handle AGENTS.md specially - upload as project instructions
+        agents_path = folder_path / "AGENTS.md"
+        if agents_path.exists():
+            try:
+                with open(agents_path, 'r', encoding='utf-8') as f:
+                    instructions = f.read()
+                self.provider.update_project_instructions(org_id, project_id, instructions)
+                stats["uploaded"] += 1
+            except Exception as e:
+                safe_print(f"    Warning: Could not upload instructions: {e}")
+
+        # Get local files from context folder only
         local_files = {}
-        for file_path in folder_path.glob("**/*"):
-            if file_path.is_file():
-                # Skip special files/folders
-                if ".claudesync" in str(file_path):
-                    continue
-                if "claude_chats" in str(file_path):
-                    continue
+        context_path = folder_path / "context"
 
-                rel_path = file_path.relative_to(folder_path)
+        if context_path.exists():
+            for file_path in context_path.glob("*"):
+                if file_path.is_file():
+                    # Skip special files
+                    if ".claudesync" in str(file_path):
+                        continue
+                    if "chats" in str(file_path):
+                        continue
 
-                # Handle AGENTS.md specially - upload as project instructions
-                if rel_path.name == "AGENTS.md":
                     try:
                         with open(file_path, 'r', encoding='utf-8') as f:
-                            instructions = f.read()
-                        self.provider.update_project_instructions(org_id, project_id, instructions)
-                        stats["uploaded"] += 1
-                    except Exception as e:
-                        safe_print(f"    Warning: Could not upload instructions: {e}")
-                    continue
-
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    local_files[str(rel_path)] = {
-                        'content': content,
-                        'hash': compute_md5_hash(content)
-                    }
-                except Exception:
-                    continue
+                            content = f.read()
+                        # Use just the filename (not context/filename)
+                        local_files[file_path.name] = {
+                            'content': content,
+                            'hash': compute_md5_hash(content)
+                        }
+                    except Exception:
+                        continue
 
         # Build remote file map
         remote_map = {f['file_name']: f for f in remote_files}
@@ -344,34 +350,48 @@ class WorkspaceSync:
         return False
 
     def _sync_chats(self, org_id: str, dry_run: bool) -> int:
-        """Sync chat conversations to claude_chats folder."""
+        """Sync chat conversations to per-project /chats folders."""
         try:
-            chats_dir = self.root / "claude_chats"
-            chats_dir.mkdir(exist_ok=True)
-
             conversations = self.provider.get_chat_conversations(org_id)
+            synced_count = 0
 
-            for conv in conversations[:10]:  # Limit to 10 for testing
+            for conv in conversations:
                 try:
                     chat_data = self.provider.get_chat_conversation(org_id, conv['uuid'])
 
-                    # Save as markdown
-                    chat_file = chats_dir / f"{self._sanitize_name(conv.get('name', conv['uuid']))}.md"
-                    with open(chat_file, 'w', encoding='utf-8') as f:
-                        f.write(f"# {conv.get('name', 'Untitled Chat')}\n\n")
-                        f.write(f"**Created**: {conv.get('created_at', 'Unknown')}\n\n")
+                    # Determine project folder (use project_uuid if available)
+                    project_id = conv.get('project_uuid') or chat_data.get('project_uuid')
 
-                        # Write messages (simplified)
-                        if 'chat_messages' in chat_data:
-                            for msg in chat_data['chat_messages']:
-                                sender = msg.get('sender', 'Unknown')
-                                text = msg.get('text', '')
-                                f.write(f"## {sender}\n\n{text}\n\n---\n\n")
+                    if project_id and project_id in self.config.get("project_map", {}):
+                        # Save to project's chats folder
+                        folder_name = self.config["project_map"][project_id]
+                        project_chats_dir = self.root / folder_name / "chats"
+                    else:
+                        # Fallback to global chats folder for chats without project
+                        project_chats_dir = self.root / "claude_chats"
+
+                    if not dry_run:
+                        project_chats_dir.mkdir(parents=True, exist_ok=True)
+
+                        # Save as markdown
+                        chat_file = project_chats_dir / f"{self._sanitize_name(conv.get('name', conv['uuid']))}.md"
+                        with open(chat_file, 'w', encoding='utf-8') as f:
+                            f.write(f"# {conv.get('name', 'Untitled Chat')}\n\n")
+                            f.write(f"**Created**: {conv.get('created_at', 'Unknown')}\n\n")
+
+                            # Write messages (simplified)
+                            if 'chat_messages' in chat_data:
+                                for msg in chat_data['chat_messages']:
+                                    sender = msg.get('sender', 'Unknown')
+                                    text = msg.get('text', '')
+                                    f.write(f"## {sender}\n\n{text}\n\n---\n\n")
+
+                    synced_count += 1
 
                 except Exception as e:
                     safe_print(f"    Warning: Could not sync chat {conv.get('name', 'Unknown')}: {e}")
 
-            return len(conversations)
+            return synced_count
         except Exception as e:
             safe_print(f"    Warning: Could not sync chats: {e}")
             return 0

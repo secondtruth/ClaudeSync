@@ -59,6 +59,7 @@ test = [
 
 [project.scripts]
 claudesync = "claudesync.cli.main:cli"
+csync = "claudesync.cli.minimal_cli:cli"
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]
