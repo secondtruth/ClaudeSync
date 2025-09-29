@@ -437,5 +437,140 @@ class WorkspaceSync:
                     project_info.update(data)
             
             projects.append(project_info)
-        
+
         return projects
+
+    def analyze_diff(self, provider, detailed: bool = False) -> dict:
+        """
+        Analyze differences between local workspace and remote Claude.ai projects.
+        Returns detailed diff information.
+        """
+        diff_info = {
+            "summary": {},
+            "remote_only": [],
+            "local_only": [],
+            "matched": []
+        }
+
+        # Get remote projects
+        orgs = provider.get_organizations()
+        if not orgs:
+            raise ValueError("No organizations found")
+
+        active_org = orgs[0]
+        remote_projects = provider.get_projects(active_org['id'])
+
+        # Get local folders
+        local_folders = {}
+        if self.root.exists():
+            for folder in self.root.iterdir():
+                if folder.is_dir() and not folder.name.startswith('.'):
+                    # Skip special folders
+                    if folder.name in ['claude_chats', '.claudesync']:
+                        continue
+                    local_folders[folder.name] = folder
+
+        # Build remote project map by name
+        remote_by_name = {}
+        for project in remote_projects:
+            sanitized_name = self._sanitize_name(project['name'])
+            remote_by_name[sanitized_name] = project
+
+        # Find remote-only projects
+        for project in remote_projects:
+            sanitized_name = self._sanitize_name(project['name'])
+            if sanitized_name not in local_folders:
+                project_info = {
+                    "name": project['name'],
+                    "id": project['id'],
+                    "sanitized_name": sanitized_name
+                }
+
+                # Get file count if detailed
+                if detailed:
+                    try:
+                        files = provider.list_files(active_org['id'], project['id'])
+                        project_info['file_count'] = len(files)
+                    except:
+                        project_info['file_count'] = 0
+
+                diff_info['remote_only'].append(project_info)
+
+        # Find local-only folders
+        for folder_name in local_folders:
+            if folder_name not in remote_by_name:
+                diff_info['local_only'].append(folder_name)
+
+        # Analyze matched projects
+        for folder_name, folder_path in local_folders.items():
+            if folder_name in remote_by_name:
+                project = remote_by_name[folder_name]
+                match_info = {
+                    "name": project['name'],
+                    "id": project['id'],
+                    "folder": folder_name,
+                    "has_differences": False,
+                    "remote_only_files": [],
+                    "local_only_files": [],
+                    "modified_files": []
+                }
+
+                if detailed:
+                    # Get remote files
+                    try:
+                        remote_files = provider.list_files(active_org['id'], project['id'])
+                        remote_file_map = {f['file_name']: f for f in remote_files}
+                    except:
+                        remote_file_map = {}
+
+                    # Get local files from context folder
+                    local_file_map = {}
+                    context_path = folder_path / "context"
+                    if context_path.exists():
+                        for file_path in context_path.glob("*"):
+                            if file_path.is_file():
+                                try:
+                                    with open(file_path, 'r', encoding='utf-8') as f:
+                                        content = f.read()
+                                    local_file_map[file_path.name] = {
+                                        'path': file_path,
+                                        'hash': compute_md5_hash(content)
+                                    }
+                                except:
+                                    pass
+
+                    # Check AGENTS.md
+                    agents_path = folder_path / "AGENTS.md"
+                    if agents_path.exists():
+                        # AGENTS.md is handled separately, not in files
+                        pass
+
+                    # Find differences
+                    for filename, remote_file in remote_file_map.items():
+                        if filename not in local_file_map:
+                            match_info['remote_only_files'].append(filename)
+                            match_info['has_differences'] = True
+                        else:
+                            # Check if content matches
+                            remote_hash = compute_md5_hash(remote_file['content'])
+                            if local_file_map[filename]['hash'] != remote_hash:
+                                match_info['modified_files'].append(filename)
+                                match_info['has_differences'] = True
+
+                    for filename in local_file_map:
+                        if filename not in remote_file_map:
+                            match_info['local_only_files'].append(filename)
+                            match_info['has_differences'] = True
+
+                diff_info['matched'].append(match_info)
+
+        # Summary
+        diff_info['summary'] = {
+            "remote_projects": len(remote_projects),
+            "local_folders": len(local_folders),
+            "matched": len(diff_info['matched']),
+            "remote_only": len(diff_info['remote_only']),
+            "local_only": len(diff_info['local_only'])
+        }
+
+        return diff_info

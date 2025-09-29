@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from claudesync.provider_factory import get_provider
-from claudesync.workspace_sync import WorkspaceSync
+from claudesync.workspace_sync import WorkspaceSync, safe_print
 from claudesync.configmanager import FileConfigManager
 
 
@@ -49,6 +49,9 @@ def cli():
           --conflict <strategy>             Conflict resolution (remote/local/newer)
           --dry-run                         Preview changes without syncing
       csync workspace status                Show workspace sync status
+      csync workspace diff                  Audit differences between local and remote
+          --detailed                        Show file-level differences
+          --json                            Output as JSON
 
     \b
     GUI:
@@ -137,6 +140,98 @@ def status():
 def workspace():
     """Workspace sync commands."""
     pass
+
+
+@workspace.command()
+@click.option('--detailed', is_flag=True, help='Show detailed file differences')
+@click.option('--json', 'output_json', is_flag=True, help='Output as JSON')
+def diff(detailed, output_json):
+    """Audit differences between local workspace and Claude.ai projects."""
+    # Load workspace config
+    config_file = Path.home() / ".claudesync" / "workspace.json"
+
+    if not config_file.exists():
+        click.echo("X No workspace configured. Run: csync workspace init [path]")
+        sys.exit(1)
+
+    import json
+    with open(config_file, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+
+    workspace_root = config.get("workspace_root")
+    if not workspace_root:
+        click.echo("X No workspace root configured")
+        sys.exit(1)
+
+    # Get provider and check auth
+    provider, _ = get_provider_with_auth()
+
+    # Create workspace syncer
+    syncer = WorkspaceSync(workspace_root, provider)
+
+    # Get diff analysis
+    diff_info = syncer.analyze_diff(provider, detailed)
+
+    if output_json:
+        click.echo(json.dumps(diff_info, indent=2, ensure_ascii=False))
+    else:
+        # Display human-readable diff
+        click.echo("\n=== WORKSPACE DIFF ANALYSIS ===\n")
+
+        # Summary
+        click.echo(f"Workspace: {workspace_root}")
+        click.echo(f"Remote projects: {diff_info['summary']['remote_projects']}")
+        click.echo(f"Local folders: {diff_info['summary']['local_folders']}")
+        click.echo(f"Matched: {diff_info['summary']['matched']}")
+        click.echo(f"Remote only: {diff_info['summary']['remote_only']}")
+        click.echo(f"Local only: {diff_info['summary']['local_only']}")
+
+        # Projects only on remote
+        if diff_info['remote_only']:
+            click.echo(f"\n[DOWNLOAD] Projects on Claude.ai NOT in local workspace ({len(diff_info['remote_only'])}):")
+            for project in diff_info['remote_only']:
+                safe_print(f"  - {project['name']}")
+                if detailed and project.get('file_count'):
+                    click.echo(f"    Files: {project['file_count']}")
+
+        # Folders only on local
+        if diff_info['local_only']:
+            click.echo(f"\n[UPLOAD] Local folders NOT on Claude.ai ({len(diff_info['local_only'])}):")
+            for folder in diff_info['local_only']:
+                safe_print(f"  - {folder}")
+
+        # Matched but different
+        if diff_info['matched']:
+            click.echo(f"\n[SYNC] Matched projects with differences ({len(diff_info['matched'])}):")
+            for match in diff_info['matched']:
+                if match['has_differences']:
+                    safe_print(f"  - {match['name']}")
+                    if match['remote_only_files']:
+                        click.echo(f"    Remote only: {len(match['remote_only_files'])} files")
+                        if detailed:
+                            for f in match['remote_only_files'][:5]:
+                                click.echo(f"      + {f}")
+                    if match['local_only_files']:
+                        click.echo(f"    Local only: {len(match['local_only_files'])} files")
+                        if detailed:
+                            for f in match['local_only_files'][:5]:
+                                click.echo(f"      - {f}")
+                    if match['modified_files']:
+                        click.echo(f"    Modified: {len(match['modified_files'])} files")
+                        if detailed:
+                            for f in match['modified_files'][:5]:
+                                click.echo(f"      * {f}")
+                elif not detailed:
+                    safe_print(f"  OK {match['name']} (in sync)")
+
+        # Recommendations
+        click.echo("\n[RECOMMENDATIONS]")
+        if diff_info['remote_only']:
+            click.echo("  - Run 'csync workspace sync' to download missing projects")
+        if diff_info['summary']['local_only'] > 0:
+            click.echo("  - Run 'csync workspace sync --bidirectional' to upload local folders")
+        if any(m['has_differences'] for m in diff_info['matched']):
+            click.echo("  - Run 'csync workspace sync --bidirectional --conflict newer' to sync changes")
 
 
 @cli.command()
