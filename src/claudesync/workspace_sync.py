@@ -151,16 +151,22 @@ class WorkspaceSync:
                 folder_name = self.config["project_map"][project_id]
             else:
                 folder_name = self._sanitize_name(project_name)
-                # Handle duplicates
-                base_name = folder_name
-                counter = 1
-                while (self.root / folder_name).exists():
+
+                # Check if folder name already tracked in project_map for a different project
+                reverse_map = {v: k for k, v in self.config["project_map"].items()}
+                if folder_name in reverse_map and reverse_map[folder_name] != project_id:
+                    # This folder name is already claimed by another project, find a unique suffix
+                    base_name = folder_name
+                    counter = 1
                     folder_name = f"{base_name}_{counter}"
-                    counter += 1
-                self.config["project_map"][project_id] = folder_name
-            
+                    while folder_name in reverse_map:
+                        counter += 1
+                        folder_name = f"{base_name}_{counter}"
+                # If folder name not tracked or tracked for this project, use it (even if it exists on disk)
+                # Don't save to project_map yet - wait until we verify actual folder name
+
             folder_path = self.root / folder_name
-            
+
             # Dry run - just show what would happen
             if dry_run:
                 if folder_path.exists():
@@ -169,10 +175,18 @@ class WorkspaceSync:
                 else:
                     safe_print(f"  Would create: {folder_name}")
                     return "created"
-            
+
             # Create folder if needed
             is_new = not folder_path.exists()
             folder_path.mkdir(exist_ok=True)
+
+            # Verify actual folder name created (filesystem may strip emojis/unicode)
+            # Get the actual name from the directory listing
+            actual_folder_name = folder_path.name
+
+            # Update project_map with actual folder name if it's new or different
+            if project_id not in self.config["project_map"] or self.config["project_map"][project_id] != actual_folder_name:
+                self.config["project_map"][project_id] = actual_folder_name
             
             # Sync project instructions to AGENTS.md
             try:
@@ -470,41 +484,46 @@ class WorkspaceSync:
                         continue
                     local_folders[folder.name] = folder
 
-        # Build remote project map by name
-        remote_by_name = {}
-        for project in remote_projects:
-            sanitized_name = self._sanitize_name(project['name'])
-            remote_by_name[sanitized_name] = project
+        # Build mappings using project_map (which tracks project_id -> folder_name)
+        project_map = self.config.get("project_map", {})
 
-        # Find remote-only projects
+        # Reverse map: folder_name -> project_id
+        folder_to_project_id = {folder_name: project_id for project_id, folder_name in project_map.items()}
+
+        # Map remote projects by ID
+        remote_by_id = {project['id']: project for project in remote_projects}
+
+        # Find remote-only projects (projects not in local workspace)
         for project in remote_projects:
-            sanitized_name = self._sanitize_name(project['name'])
-            if sanitized_name not in local_folders:
+            project_id = project['id']
+            # Check if this project is tracked in project_map
+            if project_id not in project_map:
                 project_info = {
                     "name": project['name'],
-                    "id": project['id'],
-                    "sanitized_name": sanitized_name
+                    "id": project_id,
+                    "sanitized_name": self._sanitize_name(project['name'])
                 }
 
                 # Get file count if detailed
                 if detailed:
                     try:
-                        files = provider.list_files(active_org['id'], project['id'])
+                        files = provider.list_files(active_org['id'], project_id)
                         project_info['file_count'] = len(files)
                     except:
                         project_info['file_count'] = 0
 
                 diff_info['remote_only'].append(project_info)
 
-        # Find local-only folders
+        # Find local-only folders (folders not tracked in project_map)
         for folder_name in local_folders:
-            if folder_name not in remote_by_name:
+            if folder_name not in folder_to_project_id:
                 diff_info['local_only'].append(folder_name)
 
-        # Analyze matched projects
-        for folder_name, folder_path in local_folders.items():
-            if folder_name in remote_by_name:
-                project = remote_by_name[folder_name]
+        # Analyze matched projects (tracked in project_map AND exist locally)
+        for project_id, folder_name in project_map.items():
+            if folder_name in local_folders and project_id in remote_by_id:
+                project = remote_by_id[project_id]
+                folder_path = local_folders[folder_name]
                 match_info = {
                     "name": project['name'],
                     "id": project['id'],
