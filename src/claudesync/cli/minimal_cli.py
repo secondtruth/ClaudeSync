@@ -145,7 +145,8 @@ def workspace():
 @workspace.command()
 @click.option('--detailed', is_flag=True, help='Show detailed file differences')
 @click.option('--json', 'output_json', is_flag=True, help='Output as JSON')
-def diff(detailed, output_json):
+@click.option('--save-report', is_flag=True, help='Save detailed report to workspace root')
+def diff(detailed, output_json, save_report):
     """Audit differences between local workspace and Claude.ai projects."""
     # Load workspace config
     config_file = Path.home() / ".claudesync" / "workspace.json"
@@ -155,6 +156,7 @@ def diff(detailed, output_json):
         sys.exit(1)
 
     import json
+    from datetime import datetime
     with open(config_file, 'r', encoding='utf-8') as f:
         config = json.load(f)
 
@@ -169,8 +171,84 @@ def diff(detailed, output_json):
     # Create workspace syncer
     syncer = WorkspaceSync(workspace_root, provider)
 
-    # Get diff analysis
-    diff_info = syncer.analyze_diff(provider, detailed)
+    # Get diff analysis (always detailed if saving report)
+    diff_info = syncer.analyze_diff(provider, detailed or save_report)
+
+    # Save detailed report if requested
+    if save_report:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_filename = f"workspace_diff_report_{timestamp}.md"
+        report_path = Path(workspace_root) / report_filename
+
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write(f"# Workspace Diff Report\n\n")
+            f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"**Workspace:** {workspace_root}\n\n")
+
+            # Summary section
+            f.write(f"## Summary\n\n")
+            f.write(f"- Remote projects: {diff_info['summary']['remote_projects']}\n")
+            f.write(f"- Local folders: {diff_info['summary']['local_folders']}\n")
+            f.write(f"- Matched projects: {diff_info['summary']['matched']}\n")
+            f.write(f"- Remote only: {diff_info['summary']['remote_only']}\n")
+            f.write(f"- Local only: {diff_info['summary']['local_only']}\n\n")
+
+            # Remote-only projects
+            if diff_info['remote_only']:
+                f.write(f"## Remote-Only Projects ({len(diff_info['remote_only'])})\n\n")
+                f.write("These projects exist on Claude.ai but not in your local workspace.\n\n")
+                for project in diff_info['remote_only']:
+                    f.write(f"### {project['name']}\n")
+                    f.write(f"- **Project ID:** `{project['id']}`\n")
+                    f.write(f"- **Sanitized name:** `{project['sanitized_name']}`\n")
+                    if 'file_count' in project:
+                        f.write(f"- **Files:** {project['file_count']}\n")
+                    f.write(f"\n")
+
+            # Local-only folders
+            if diff_info['local_only']:
+                f.write(f"## Local-Only Folders ({len(diff_info['local_only'])})\n\n")
+                f.write("These folders exist locally but are not tracked in the project map.\n\n")
+                for folder in diff_info['local_only']:
+                    f.write(f"- `{folder}`\n")
+                f.write(f"\n")
+
+            # Matched projects with details
+            if diff_info['matched']:
+                f.write(f"## Matched Projects ({len(diff_info['matched'])})\n\n")
+                for match in diff_info['matched']:
+                    f.write(f"### {match['name']}\n")
+                    f.write(f"- **Project ID:** `{match['id']}`\n")
+                    f.write(f"- **Local folder:** `{match['folder']}`\n")
+                    f.write(f"- **Status:** {'⚠️ Has differences' if match['has_differences'] else '✅ In sync'}\n")
+
+                    if match['remote_only_files']:
+                        f.write(f"\n**Remote-only files ({len(match['remote_only_files'])}):**\n")
+                        for fname in match['remote_only_files']:
+                            f.write(f"  - ➕ `{fname}`\n")
+
+                    if match['local_only_files']:
+                        f.write(f"\n**Local-only files ({len(match['local_only_files'])}):**\n")
+                        for fname in match['local_only_files']:
+                            f.write(f"  - ➖ `{fname}`\n")
+
+                    if match['modified_files']:
+                        f.write(f"\n**Modified files ({len(match['modified_files'])}):**\n")
+                        for fname in match['modified_files']:
+                            f.write(f"  - ✏️ `{fname}`\n")
+
+                    f.write(f"\n")
+
+            # Recommendations
+            f.write(f"## Recommendations\n\n")
+            if diff_info['remote_only']:
+                f.write(f"- Run `csync workspace sync` to download missing projects\n")
+            if diff_info['summary']['local_only'] > 0:
+                f.write(f"- Run `csync workspace sync --bidirectional` to upload local folders\n")
+            if any(m['has_differences'] for m in diff_info['matched']):
+                f.write(f"- Run `csync workspace sync --bidirectional --conflict newer` to sync changes\n")
+
+        click.echo(f"✅ Report saved to: {report_path}")
 
     if output_json:
         click.echo(json.dumps(diff_info, indent=2, ensure_ascii=False))
