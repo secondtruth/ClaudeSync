@@ -318,8 +318,31 @@ class WorkspaceSync:
                     except Exception:
                         continue
 
-        # Build remote file map
-        remote_map = {f['file_name']: f for f in remote_files}
+        # Build remote file map and detect duplicates
+        from collections import defaultdict
+        remote_by_name = defaultdict(list)
+        for f in remote_files:
+            remote_by_name[f['file_name']].append(f)
+
+        # Remove duplicate files on remote (keep newest by UUID)
+        remote_map = {}
+        for file_name, files in remote_by_name.items():
+            if len(files) > 1:
+                # Duplicates found - keep newest, delete rest
+                files_sorted = sorted(files, key=lambda x: x['uuid'])
+                to_keep = files_sorted[-1]
+                to_delete = files_sorted[:-1]
+
+                safe_print(f"    ⚠️  Found {len(files)} copies of '{file_name}', removing {len(to_delete)} duplicates")
+                for dup in to_delete:
+                    try:
+                        self.provider.delete_file(org_id, project_id, dup['uuid'])
+                    except Exception as e:
+                        safe_print(f"      Warning: Could not delete duplicate: {e}")
+
+                remote_map[file_name] = to_keep
+            else:
+                remote_map[file_name] = files[0]
 
         # Upload new or modified files
         for file_name, local_data in local_files.items():
