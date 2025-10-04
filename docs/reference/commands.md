@@ -1,4 +1,4 @@
-# ClaudeSync Command Summary
+﻿# ClaudeSync Command Summary
 
 ## Available Commands
 
@@ -15,7 +15,7 @@ csync project create
 csync project set
 csync project ls
 csync project select [--multiple]
-csync project instructions init  # Creates project-instructions.md
+csync project instructions init  # Creates PROJECT_INSTRUCTIONS.md
 ```
 
 ### Synchronization (Git-like)
@@ -81,6 +81,28 @@ csync conflict status
    ```
 
 ## Notes
-- The `project-instructions.md` file is created with `csync project instructions init`
+- The `PROJECT_INSTRUCTIONS.md` file is created with `csync project instructions init`
 - Both `claudesync` and `csync` commands work identically
 - Configuration: `~/.claudesync/config.json` (global), `.claudesync/config.local.json` (per project)
+
+## Local Workspace Utilities (Repository Checkout)
+When developing from the repo checkout you can run the helper CLI directly:
+
+```powershell
+python -m scripts.workspace_tools fix "C:\path\to\workspace"
+python -m scripts.workspace_tools migrate "C:\path\to\workspace" --remove-old
+```
+
+Run `python -m scripts.workspace_tools --help` to see all options.
+
+## Local GUI Launchers (Repository Checkout)
+The Python entry point now handles both variants:
+
+```powershell
+python -m scripts.launch_gui --deps-only           # install GUI deps
+python -m scripts.launch_gui                       # launch full GUI
+python -m scripts.launch_gui --variant simple      # launch simple GUI
+```
+
+Use `--no-cli` to skip the `csync` wrapper and `--verbose` for extra logging.
+

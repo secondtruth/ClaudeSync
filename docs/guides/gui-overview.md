@@ -6,7 +6,7 @@ A simple graphical interface for ClaudeSync using CustomTkinter.
 
 ### Windows
 1. **Easy way**: Double-click `ClaudeSync_GUI.bat`
-2. **Direct**: Run `python launch_gui.py`
+2. **Direct**: Run `python -m scripts.launch_gui`
 
 ### Manual Installation
 ```bash
@@ -14,14 +14,14 @@ A simple graphical interface for ClaudeSync using CustomTkinter.
 pip install customtkinter pillow
 
 # Run the GUI
-python launch_gui.py
+python -m scripts.launch_gui
 # OR if csync is in PATH:
 csync-gui
 ```
 
 ## Features
 
-### Implemented ✅
+### Implemented âœ…
 - **Authentication Management**
   - Login/logout with session key
   - Real-time auth status
@@ -53,10 +53,10 @@ csync-gui
   - Error handling with dialogs
 
 ### Coming Soon
-- ⚙️ Settings configuration
-- 📊 Sync history and logs
-- 💬 Chat management
-- 🔄 Auto-sync scheduling
+- âš™ï¸ Settings configuration
+- ðŸ“Š Sync history and logs
+- ðŸ’¬ Chat management
+- ðŸ”„ Auto-sync scheduling
 
 ## Architecture
 
@@ -78,3 +78,4 @@ To add new features:
 - The GUI calls `csync` CLI commands under the hood
 - All existing CLI functionality remains unchanged
 - GUI state is not persisted between sessions (uses live queries)
+

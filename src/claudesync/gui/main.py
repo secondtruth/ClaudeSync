@@ -11,10 +11,14 @@ from typing import Optional
 import webbrowser
 import threading
 import queue
+import logging
 from datetime import datetime
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+SIMPLE_GUI_DIR = PROJECT_ROOT / 'gui-simple'
 
 from claudesync.configmanager.file_config_manager import FileConfigManager
 from claudesync.exceptions import ConfigurationError
@@ -772,6 +776,34 @@ def launch():
     """Entry point for GUI"""
     app = ClaudeSyncGUI()
     app.run()
+
+
+def _launch_simple_gui() -> None:
+    """Launch the lightweight Simple GUI when available."""
+    if not SIMPLE_GUI_DIR.exists():
+        raise RuntimeError('Simple GUI assets are not available in this installation.')
+    simple_path = str(SIMPLE_GUI_DIR)
+    if simple_path not in sys.path:
+        sys.path.insert(0, simple_path)
+    try:
+        from simple_gui import main as simple_main  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError('Simple GUI dependencies are missing.') from exc
+    simple_main()
+
+
+def run_gui(simple: bool = False, debug: bool = False) -> None:
+    """Entry point used by the CLI wrapper."""
+    if simple:
+        _launch_simple_gui()
+        return
+
+    if debug:
+        os.environ.setdefault('CLAUDESYNC_GUI_DEBUG', '1')
+        logging.getLogger(__name__).setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    launch()
 
 
 if __name__ == "__main__":

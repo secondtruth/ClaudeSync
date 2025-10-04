@@ -9,19 +9,19 @@ A clean, modern GUI for ClaudeSync built with CustomTkinter that provides visual
 - **Separate Package**: GUI code lives in `src/claudesync/gui/` 
 - **Optional Dependency**: GUI is an optional install with `pip install claudesync[gui]`
 - **CLI Wrapper**: GUI calls existing CLI commands via subprocess - no core logic duplication
-- **Independent Entry Point**: `csync-gui` command or `python launch_gui.py`
+- **Independent Entry Point**: `csync-gui` command or `python -m scripts.launch_gui`
 
 ### File Structure
 ```
 src/claudesync/gui/
-├── __init__.py
-├── main.py              # Main application window and navigation
-└── views/               # Individual view components
-    ├── __init__.py
-    ├── projects.py      # Project management view
-    ├── sync.py          # Sync operations view
-    ├── workspace.py     # Workspace management view
-    └── settings.py      # Settings configuration view
+â”œâ”€â”€ __init__.py
+â”œâ”€â”€ main.py              # Main application window and navigation
+â””â”€â”€ views/               # Individual view components
+    â”œâ”€â”€ __init__.py
+    â”œâ”€â”€ projects.py      # Project management view
+    â”œâ”€â”€ sync.py          # Sync operations view
+    â”œâ”€â”€ workspace.py     # Workspace management view
+    â””â”€â”€ settings.py      # Settings configuration view
 ```
 
 ## Implemented Features
@@ -94,14 +94,14 @@ commands = [
 
 ### Windows Launch Options
 1. **Batch File**: Double-click `ClaudeSync_GUI.bat`
-2. **Direct Python**: `python launch_gui.py`
+2. **Direct Python**: `python -m scripts.launch_gui`
 3. **Command**: `csync-gui` (if installed with pip)
 
 ### Workflow Example
 1. Launch GUI
 2. Login with Claude.ai session key
-3. Navigate to Projects → Create new project
-4. Go to Sync → Select options → Start sync
+3. Navigate to Projects â†’ Create new project
+4. Go to Sync â†’ Select options â†’ Start sync
 5. Monitor real-time progress and output
 
 ## Benefits Over CLI
@@ -125,3 +125,4 @@ commands = [
 - Requires Python 3.10+ (same as ClaudeSync)
 - All paths are handled with pathlib for cross-platform compatibility
 - Subprocess calls use proper escaping and error handling
+

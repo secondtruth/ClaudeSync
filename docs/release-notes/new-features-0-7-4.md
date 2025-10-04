@@ -1,8 +1,8 @@
-# ClaudeSync v0.7.4 - New Features
+﻿# ClaudeSync v0.7.4 - New Features
 
 ## 1. Pull Support in Workspace Sync
 
-The `csync workspace sync-all` command now supports pulling remote files before pushing local changes. This ensures you get all remote files (including `project-instructions.md`) that may not exist locally.
+The `csync workspace sync-all` command now supports pulling remote files before pushing local changes. This ensures you get all remote files (including `PROJECT_INSTRUCTIONS.md`) that may not exist locally.
 
 ### Usage
 
@@ -20,7 +20,7 @@ csync workspace sync-all --pull --sequential
 ### Benefits
 - Ensures you have all remote project files locally
 - Prevents accidental overwrites
-- Properly syncs `project-instructions.md` files from Claude.ai
+- Properly syncs `PROJECT_INSTRUCTIONS.md` files from Claude.ai
 
 ## 2. Browser Authentication
 
@@ -98,9 +98,9 @@ cd "your-project"
 csync project instructions status
 ```
 
-### Fix Missing project-instructions.md
+### Fix Missing PROJECT_INSTRUCTIONS.md
 
-If your projects are missing `project-instructions.md`:
+If your projects are missing `PROJECT_INSTRUCTIONS.md`:
 
 ```bash
 # Pull all remote files for all projects
@@ -110,3 +110,4 @@ csync workspace sync-all --pull
 cd "your-project"
 csync pull
 ```
+

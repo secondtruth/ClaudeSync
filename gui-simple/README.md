@@ -44,40 +44,42 @@ A streamlined terminal-style GUI for ClaudeSync with essential buttons for commo
 
 ## Usage
 
-1. **Launch**: Double-click `launch_simple_gui.bat`
-2. **Login**: Click Login button and follow terminal prompts
-3. **Set Organization**: Required after first login
-4. **Create/Set Project**: Initialize or connect to project
-5. **Use Sync Operations**: Push/Pull/Sync as needed
+1. **Launch (repo checkout)**: python -m scripts.launch_gui --variant simple
+   - Prep dependencies first with python -m scripts.launch_gui --variant simple --deps-only
+2. **Launch (installed package)**: python gui-simple/simple_gui.py
+3. **Login**: Click Login button and follow terminal prompts
+4. **Set Organization**: Required after first login
+5. **Create/Set Project**: Initialize or connect to project
+6. **Use Sync Operations**: Push/Pull/Sync as needed
 
 ### Keyboard Shortcuts
 
-- `Ctrl+P` - Push files
-- `Ctrl+L` - Pull files  
-- `Ctrl+S` - Sync files
-- `Ctrl+W` - Workspace menu
-- `Ctrl+K` - Clear terminal
-- `F5` - Refresh status
-- `Ctrl+Q` - Quit
+- Ctrl+P - Push files
+- Ctrl+L - Pull files  
+- Ctrl+S - Sync files
+- Ctrl+W - Workspace menu
+- Ctrl+K - Clear terminal
+- F5 - Refresh status
+- Ctrl+Q - Quit
 
 ## Requirements
 
 - Python 3.8+
 - customtkinter
-- ClaudeSync installed (`pip install claudesync`)
+- ClaudeSync installed (pip install claudesync)
 
 ## Installation
 
-```bash
+`ash
 # Install ClaudeSync if not already installed
 pip install claudesync
 
 # Install GUI dependency
 pip install customtkinter
 
-# Run the GUI
+# Run the simple GUI directly
 python gui-simple/simple_gui.py
-```
+`
 
 ## Design Philosophy
 
@@ -103,6 +105,6 @@ This simple GUI focuses on:
 
 ## Troubleshooting
 
-- **"csync not found"**: Install ClaudeSync with `pip install claudesync`
-- **GUI won't start**: Install customtkinter with `pip install customtkinter`
+- **"csync not found"**: Install ClaudeSync with pip install claudesync
+- **GUI won't start**: Install customtkinter with pip install customtkinter
 - **Auth fails**: Check terminal window for detailed error messages
