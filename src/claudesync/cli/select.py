@@ -11,6 +11,7 @@ from typing import List, Dict, Set
 from datetime import datetime
 from ..utils import handle_errors, validate_and_get_provider
 from ..workspace_manager import WorkspaceManager, ProjectInfo
+from ..project_instructions import ProjectInstructions
 from ..workspace_config import WorkspaceConfig
 import logging
 
@@ -629,7 +630,7 @@ def _show_detailed_project_status(project: ProjectInfo):
     # Check for various files
     project_files = {
         "Config": project.path / ".claudesync" / "config.local.json",
-        "Instructions": project.path / "project-instructions.md",
+        "Instructions": project.path / ProjectInstructions.INSTRUCTIONS_FILE,
         "Chats": project.path / "claude_chats",
         "Gitignore": project.path / ".gitignore",
         "Claudeignore": project.path / ".claudeignore"
@@ -663,7 +664,7 @@ def _generate_project_report(projects: List[ProjectInfo]) -> Dict:
         # Check file existence
         checks = {
             "has_config": (project.path / ".claudesync" / "config.local.json").exists(),
-            "has_instructions": (project.path / "project-instructions.md").exists(),
+            "has_instructions": (project.path / ProjectInstructions.INSTRUCTIONS_FILE).exists(),
             "has_chats": (project.path / "claude_chats").exists(),
             "has_gitignore": (project.path / ".gitignore").exists(),
             "has_claudeignore": (project.path / ".claudeignore").exists(),

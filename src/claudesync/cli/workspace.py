@@ -8,6 +8,7 @@ from ..workspace_manager import WorkspaceManager
 from ..utils import handle_errors, validate_and_get_provider
 from ..syncmanager import SyncManager
 from ..configmanager import FileConfigManager
+from ..project_instructions import ProjectInstructions
 
 # Fix Windows Unicode issues
 if sys.platform == "win32":
@@ -218,8 +219,8 @@ def clone(config, dry_run, include_archived, skip_existing, clean):
             downloaded = 0
             for remote_file in remote_files:
                 file_name = remote_file['file_name']
-                if file_name == '.projectinstructions':
-                    file_name = 'project-instructions.md'
+                if file_name == ProjectInstructions.INSTRUCTIONS_FILE:
+                    continue
                 
                 file_path = os.path.join(project_path, file_name)
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -406,8 +407,8 @@ def sync_all(config, sequential, dry_run, verbose, no_prune, no_prune_local, one
                                             for remote_file in remote_files:
                                                 file_name = remote_file['file_name']
                                                 # Handle special project instructions file
-                                                if file_name == '.projectinstructions':
-                                                    file_name = 'project-instructions.md'
+                                                if file_name == ProjectInstructions.INSTRUCTIONS_FILE:
+                                                    continue
                                                 
                                                 file_path = os.path.join(project_path, file_name)
                                                 # Create directory if needed

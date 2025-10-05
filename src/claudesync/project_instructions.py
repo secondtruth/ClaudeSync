@@ -6,7 +6,7 @@ from typing import Optional, Dict, Tuple
 class ProjectInstructions:
     """Manages project instructions syncing with Claude.ai API."""
     
-    INSTRUCTIONS_FILE = "project-instructions.md"
+    INSTRUCTIONS_FILE = "PROJECT_INSTRUCTIONS.md"
     CONFIG_FILE = ".claudesync/instructions.json"
     
     DEFAULT_CONFIG = {
@@ -21,6 +21,7 @@ class ProjectInstructions:
         self.project_path = project_path
         self.config_path = os.path.join(project_path, self.CONFIG_FILE)
         self.config = self._load_config()
+        self.config['file_path'] = self.INSTRUCTIONS_FILE
         self.instructions_path = os.path.join(project_path, self.config['file_path'])
     
     def _load_config(self) -> Dict:

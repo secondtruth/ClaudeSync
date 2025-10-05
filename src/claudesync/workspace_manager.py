@@ -7,6 +7,7 @@ import click
 import time
 import json
 import logging
+from claudesync.project_instructions import ProjectInstructions
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +141,7 @@ class WorkspaceManager:
                             stats['files_to_delete_local'] += 1
                 
                 # Check for project instructions
-                instructions_file = os.path.join(project_path, 'project-instructions.md')
-                old_instructions_file = os.path.join(project_path, '.projectinstructions')
+                instructions_file = os.path.join(project_path, ProjectInstructions.INSTRUCTIONS_FILE)
                 
                 if os.path.exists(instructions_file):
                     stats['instructions_status'] = 'Will update'
@@ -323,7 +323,7 @@ class WorkspaceManager:
             elif sync_options.get('push_only'):
                 # Push instructions first if they exist locally
                 if sync_options.get('with_instructions', True):  # Default to True
-                    instructions_file = os.path.join(project['path'], 'project-instructions.md')
+                    instructions_file = os.path.join(project['path'], ProjectInstructions.INSTRUCTIONS_FILE)
                     if os.path.exists(instructions_file):
                         instructions_result = subprocess.run(
                             ['csync', 'project', 'instructions', 'push'],

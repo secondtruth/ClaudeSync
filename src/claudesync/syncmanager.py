@@ -18,6 +18,7 @@ from .conflict_resolver import ConflictResolver
 from .project_instructions import ProjectInstructions
 
 logger = logging.getLogger(__name__)
+INSTRUCTIONS_FILE = ProjectInstructions.INSTRUCTIONS_FILE
 
 # Sync Direction Enum as suggested by ChatGPT
 class SyncDirection(Enum):
@@ -348,7 +349,7 @@ class SyncManager:
         with tqdm(total=len(local_files), desc="Local → Remote") as pbar:
             for local_file, local_checksum in local_files.items():
                 # Skip project instructions file - it should be handled separately
-                if local_file in ['project-instructions.md', '.projectinstructions']:
+                if local_file == INSTRUCTIONS_FILE:
                     self._handle_project_instructions(local_file)
                     synced_files.add(local_file)
                     pbar.update(1)
@@ -374,11 +375,6 @@ class SyncManager:
         if self.two_way_sync:
             # Track which local files exist remotely - normalize Unicode for comparison
             remote_file_names = {normalize_unicode_path(rf["file_name"]) for rf in remote_files}
-            # Also account for renamed project instructions
-            if normalize_unicode_path('.projectinstructions') in remote_file_names:
-                remote_file_names.add(normalize_unicode_path('project-instructions.md'))
-                remote_file_names.discard(normalize_unicode_path('.projectinstructions'))
-            
             with tqdm(total=len(remote_files), desc="Local ← Remote") as pbar:
                 for remote_file in remote_files:
                     self.sync_remote_to_local(
@@ -420,7 +416,7 @@ class SyncManager:
         packed_content = io.StringIO()
         for file_path, file_hash in local_files.items():
             # Skip project instructions file - handle separately
-            if file_path in ['project-instructions.md', '.projectinstructions']:
+            if file_path == INSTRUCTIONS_FILE:
                 self._handle_project_instructions(file_path)
                 continue
                 
@@ -513,18 +509,18 @@ class SyncManager:
             # Look for project instructions in remote files
             instructions_file = None
             for rf in remote_files:
-                if rf["file_name"] in ['project-instructions.md', '.projectinstructions']:
+                if rf["file_name"] == INSTRUCTIONS_FILE:
                     instructions_file = rf
                     break
             
             if instructions_file:
-                local_instructions_path = os.path.join(self.local_path, 'project-instructions.md')
+                local_instructions_path = os.path.join(self.local_path, INSTRUCTIONS_FILE)
                 
                 # Check if local file exists and compare
                 should_pull = False
                 if not os.path.exists(local_instructions_path):
                     should_pull = True
-                    logger.debug("No local project-instructions.md found, pulling from remote")
+                    logger.debug(f"No local {INSTRUCTIONS_FILE} found, pulling from remote")
                 else:
                     # Compare checksums
                     with open(local_instructions_path, 'r', encoding='utf-8') as f:
@@ -541,14 +537,7 @@ class SyncManager:
                     # Write remote content to local file
                     with open(local_instructions_path, 'w', encoding='utf-8') as f:
                         f.write(instructions_file["content"])
-                    logger.info(f"✓ Pulled project-instructions.md from remote")
-                    
-                    # If the remote file was .projectinstructions, we should delete it
-                    # and upload the renamed version
-                    if instructions_file["file_name"] == '.projectinstructions':
-                        logger.debug("Converting .projectinstructions to project-instructions.md")
-                        # The rename will happen on next push
-                        
+                    logger.info(f"✓ Pulled {INSTRUCTIONS_FILE} from remote")
         except Exception as e:
             logger.error(f"Error pulling project instructions: {e}")
             # Don't raise - we don't want to break the entire sync
@@ -626,14 +615,13 @@ class SyncManager:
                     logger.debug(f"Updated timestamp on local file {local_file_path}")
 
     def sync_remote_to_local(self, remote_file, remote_files_to_delete, synced_files):
-        # Handle special case for project instructions file
         file_name = remote_file["file_name"]
-        if file_name == '.projectinstructions':
-            file_name = 'project-instructions.md'
-            # Update the remote_file dict to use the new name
-            remote_file = remote_file.copy()
-            remote_file["file_name"] = file_name
-        
+        if file_name == INSTRUCTIONS_FILE:
+            logger.debug(f"Skipping {INSTRUCTIONS_FILE} during remote sync")
+            synced_files.add(file_name)
+            remote_files_to_delete.discard(file_name)
+            return
+
         local_file_path = os.path.join(self.local_path, file_name)
         if os.path.exists(local_file_path):
             self.update_existing_local_file(
@@ -667,14 +655,7 @@ class SyncManager:
     def create_new_local_file(
         self, local_file_path, remote_file, remote_files_to_delete, synced_files
     ):
-        # Handle special case for project instructions file
         file_name = remote_file['file_name']
-        if file_name == '.projectinstructions':
-            # Rename to proper format
-            file_name = 'project-instructions.md'
-            local_file_path = os.path.join(os.path.dirname(local_file_path), file_name)
-            logger.debug(f"Renaming .projectinstructions to {file_name}")
-        
         logger.debug(
             f"Creating new local file {file_name} from remote..."
         )
@@ -696,7 +677,7 @@ class SyncManager:
 
         for file_to_delete in list(remote_files_to_delete):
             # Don't delete project instructions files that might exist as knowledge files
-            if file_to_delete in ['project-instructions.md', '.projectinstructions']:
+            if file_to_delete == INSTRUCTIONS_FILE:
                 logger.debug(f"Skipping deletion of {file_to_delete} (project instructions file)")
                 continue
             self.delete_remote_files(file_to_delete, remote_files)

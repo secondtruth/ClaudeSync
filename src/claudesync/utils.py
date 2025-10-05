@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 import pathspec
 import logging
+from claudesync.project_instructions import ProjectInstructions
 
 from claudesync.exceptions import ConfigurationError, ProviderError
 from claudesync.provider_factory import get_provider
@@ -229,6 +230,9 @@ def get_local_files(config, local_path, category=None, include_submodules=False)
         for filename in filenames:
             rel_path = os.path.join(rel_root, filename)
             full_path = os.path.join(root, filename)
+
+            if rel_path == ProjectInstructions.INSTRUCTIONS_FILE:
+                continue
 
             if spec.match_file(rel_path) and should_process_file(
                 config, full_path, filename, gitignore, local_path, claudeignore
