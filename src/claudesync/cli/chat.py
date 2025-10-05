@@ -5,7 +5,7 @@ from datetime import datetime
 
 import click
 import logging
-from ..exceptions import ProviderError
+from ..exceptions import ConfigurationError, ProviderError
 from ..utils import handle_errors, validate_and_get_provider
 from ..chat_sync import sync_chats
 
@@ -73,23 +73,125 @@ def pull(config, dry_run, backup_existing):
 
 
 @chat.command()
+@click.option('-a', '--all', 'list_all', is_flag=True, help='Show chats from all projects.')
 @click.pass_obj
 @handle_errors
-def ls(config):
-    """List all chats."""
-    provider = validate_and_get_provider(config)
+def ls(config, list_all):
+    """List chats for the active project or across all projects."""
+
+    try:
+        provider = validate_and_get_provider(config, require_project=not list_all)
+    except ConfigurationError as exc:
+        if not list_all and "No active project set." in str(exc):
+            suggestion = "To list chats from all projects, run 'csync chat ls --all'."
+            raise ConfigurationError(f"{exc} {suggestion}") from exc
+        raise
+
     organization_id = config.get("active_organization_id")
     chats = provider.get_chat_conversations(organization_id)
 
-    for chat in chats:
-        project = chat.get("project")
-        project_name = project.get("name") if project else ""
-        click.echo(
-            f"UUID: {chat.get('uuid', 'Unknown')}, "
-            f"Name: {chat.get('name', 'Unnamed')}, "
-            f"Project: {project_name}, "
-            f"Updated: {chat.get('updated_at', 'Unknown')}"
+    project_label = None
+    if not list_all:
+        active_project_id = config.get("active_project_id")
+        active_project_name = config.get("active_project_name")
+        project_label = (
+            str(active_project_name)
+            if active_project_name
+            else f"Project ID: {active_project_id}"
         )
+        chats = [
+            chat
+            for chat in chats
+            if _chat_matches_project(chat, active_project_id)
+        ]
+
+    _echo_chat_table(chats, show_project_column=list_all, project_label=project_label)
+
+def _chat_matches_project(chat, project_id):
+    if not project_id:
+        return False
+
+    normalized_target = str(project_id)
+    candidate_ids = set()
+
+    project_uuid = chat.get("project_uuid")
+    if project_uuid:
+        candidate_ids.add(str(project_uuid))
+
+    for key in ("project_id", "projectId"):
+        value = chat.get(key)
+        if value:
+            candidate_ids.add(str(value))
+
+    project = chat.get("project")
+    if isinstance(project, dict):
+        for key in ("uuid", "id", "project_uuid"):
+            value = project.get(key)
+            if value:
+                candidate_ids.add(str(value))
+    elif project:
+        candidate_ids.add(str(project))
+
+    return normalized_target in candidate_ids
+
+def _resolve_project_name(chat):
+    project = chat.get("project")
+    if isinstance(project, dict):
+        for key in ("name", "title"):
+            value = project.get(key)
+            if value:
+                return str(value)
+    elif isinstance(project, str):
+        return project
+
+    fallback = chat.get("project_name") or chat.get("project_title")
+    return str(fallback) if fallback else ""
+
+def _resolve_updated_at(chat):
+    return str(
+        chat.get("updated_at")
+        or chat.get("last_activity_at")
+        or chat.get("modified_at")
+        or chat.get("created_at")
+        or ""
+    )
+
+def _echo_chat_table(chats, *, show_project_column=True, project_label=None):
+    columns = [
+        ("UUID", lambda chat: chat.get("uuid", "")),
+        ("NAME", lambda chat: chat.get("name") or ""),
+    ]
+    if show_project_column:
+        columns.append(("PROJECT", _resolve_project_name))
+    columns.append(("UPDATED", _resolve_updated_at))
+
+    if project_label:
+        click.echo(f"Project: {project_label}")
+
+    headers = [header for header, _ in columns]
+    rows = [
+        [str((getter(chat) or "")) for _, getter in columns]
+        for chat in chats
+    ]
+
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for idx, value in enumerate(row):
+            widths[idx] = max(widths[idx], len(value))
+
+    separator = "  "
+    header_line = separator.join(
+        header.ljust(widths[idx]) for idx, header in enumerate(headers)
+    )
+    click.echo(header_line)
+
+    if not rows:
+        click.echo("No chats found.")
+        return
+
+    for row in rows:
+        padded = [value.ljust(widths[idx]) for idx, value in enumerate(row)]
+        click.echo(separator.join(padded))
 
 
 @chat.command()
