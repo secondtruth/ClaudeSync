@@ -315,7 +315,7 @@ class WorkspaceManager:
                         logger.debug(f"Instructions pull failed for {project['name']}: {instructions_result.stderr}")
                 
                 # Then do regular pull
-                cmd.extend(['sync', 'pull'])
+                cmd.append('pull')
                 if sync_options.get('conflict_strategy') == 'local-wins':
                     cmd.append('--merge')
                 elif sync_options.get('conflict_strategy') == 'remote-wins':
@@ -339,7 +339,7 @@ class WorkspaceManager:
                             logger.debug(f"Instructions push failed for {project['name']}: {instructions_result.stderr}")
                 
                 # Then do regular push
-                cmd.extend(['sync', 'push'])
+                cmd.append('push')
             else:
                 # TRUE BIDIRECTIONAL SYNC - always use the sync command with two_way_sync enabled
                 
@@ -358,8 +358,8 @@ class WorkspaceManager:
                     if instructions_result.returncode != 0:
                         logger.debug(f"Instructions sync failed for {project['name']}: {instructions_result.stderr}")
                 
-                # Step 2: Use the sync sync command for true bidirectional sync
-                cmd.extend(['sync', 'sync'])
+                # Step 2: Use the sync command for true bidirectional sync
+                cmd.append('sync')
                 cmd.extend(['--conflict-strategy', sync_options.get('conflict_strategy', 'prompt')])
                 
                 # Note: With two_way_sync enabled in config, the sync command will:

@@ -15,8 +15,10 @@ import importlib.metadata
 from pathlib import Path
 
 from claudesync.configmanager import FileConfigManager, InMemoryConfigManager
-from claudesync.utils import handle_errors, validate_and_get_provider, get_local_files
+from claudesync.utils import handle_errors, validate_and_get_provider
+import claudesync.utils as utils
 from claudesync.project_instructions import ProjectInstructions
+from claudesync.syncmanager import SyncManager
 
 # Import existing command modules
 from .auth import auth as auth_module
@@ -28,7 +30,7 @@ from .conflict import conflict as conflict_module
 from .chat import chat as chat_module
 from .watch import watch as watch_module
 from .workspace import workspace as workspace_module
-from .pull import pull as pull_module, push as push_module, schedule as pull_schedule_module
+from .pull import pull as pull_command
 
 # Setup logging
 logging.basicConfig(
@@ -83,9 +85,9 @@ def cli(ctx):
     Common commands:
       csync auth login         # Authenticate with Claude.ai
       csync project create     # Create a new project
-      csync sync push          # Upload files to Claude.ai
-      csync sync pull          # Download files from Claude.ai
-      csync sync sync          # Bidirectional synchronization
+      csync push               # Upload files to Claude.ai
+      csync pull               # Download files from Claude.ai
+      csync sync               # Bidirectional synchronization
     """
     if ctx.obj is None:
         ctx.obj = FileConfigManager()  # InMemoryConfigManager() for testing
@@ -100,32 +102,44 @@ cli.add_command(org_module, name="org")  # Alias
 # ---------- Project Group (using existing project module) ----------
 cli.add_command(project_module, name="project")
 
-# ---------- Sync Group ----------
-@cli.group(cls=AliasedGroup, aliases=COMMON_ALIASES, name="sync")
-def sync_group():
-    """Synchronization commands (push, pull, sync, schedule)."""
-    pass
+# ---------- Sync Commands ----------
 
-# Add existing sync commands to sync group
-sync_group.add_command(sync_module, name="sync")
-sync_group.add_command(schedule_module, name="schedule")
-sync_group.add_command(pull_module, name="pull")
-sync_group.add_command(push_module, name="push")
 
-@sync_group.command(name="push")
+def _filter_existing_files(file_map: dict[str, str], base_path: str) -> dict[str, str]:
+    """Drop file entries that no longer exist on disk."""
+    filtered: dict[str, str] = {}
+    missing: list[str] = []
+    for relative_path, file_hash in file_map.items():
+        full_path = os.path.join(base_path, relative_path)
+        if os.path.exists(full_path):
+            filtered[relative_path] = file_hash
+        else:
+            missing.append(relative_path)
+    if missing:
+        LOG.debug(
+            "Skipping %d missing file(s) during sync: %s",
+            len(missing),
+            ", ".join(missing[:5]),
+        )
+    return filtered
+
+cli.add_command(sync_module, name="sync")
+cli.add_command(schedule_module, name="schedule")
+
+@cli.command(name="push")
 @click.option("--category", help="Specify the file category to sync")
 @click.option("--uberproject", is_flag=True, help="Include submodules in parent project sync")
 @click.option("--dryrun", is_flag=True, default=False, help="Just show what files would be sent")
 @click.option("--dry-run", is_flag=True, default=False, help="Just show what files would be sent")
 @click.pass_obj
 @handle_errors
-def sync_push(config, category, uberproject, dryrun, dry_run):
-    """Push local files to Claude project (upload only).
-    
-    For bidirectional sync, use 'csync sync sync' instead."""
+def push(config, category, uberproject, dryrun, dry_run):
+    '''Push local files to Claude project (upload only).
+
+    For bidirectional sync, use 'csync sync' instead.'''
     # Handle both --dryrun and --dry-run
     dryrun = dryrun or dry_run
-    
+
     provider = validate_and_get_provider(config, require_project=True)
 
     if not category:
@@ -170,14 +184,16 @@ def sync_push(config, category, uberproject, dryrun, dry_run):
 
         if uberproject:
             # Include submodule files in the parent project
-            local_files = get_local_files(
+            local_files = utils.get_local_files(
                 config, local_path, category, include_submodules=True
             )
         else:
             # Exclude submodule files from the parent project
-            local_files = get_local_files(
+            local_files = utils.get_local_files(
                 config, local_path, category, include_submodules=False
             )
+
+        local_files = _filter_existing_files(local_files, local_path)
 
         if dryrun:
             for file in local_files.keys():
@@ -185,46 +201,45 @@ def sync_push(config, category, uberproject, dryrun, dry_run):
                     click.echo(f"Would send file: {file}")
                 except UnicodeEncodeError:
                     # Handle emoji/unicode in filenames on Windows
-                    safe_name = file.encode('utf-8', errors='replace').decode('utf-8')
+                    safe_name = file.encode("utf-8", errors="replace").decode("utf-8")
                     click.echo(f"Would send file: {safe_name}")
             click.echo("Not sending files due to dry run mode.")
             return
 
         # Pull project instructions first (always bidirectional for instructions)
         sync_manager._pull_project_instructions(remote_files)
-        
+
         # Disable two-way sync for push (upload only)
         original_two_way = config.get("two_way_sync", False)
         config.set("two_way_sync", False, local=True)
-        
+
         sync_manager.sync(local_files, remote_files)
-        
+
         # Restore original setting
         config.set("two_way_sync", original_two_way, local=True)
-        
+
         click.echo(
             f"Files pushed successfully to '{active_project_name}': https://claude.ai/project/{active_project_id}"
         )
-        
+        click.echo(f"Main project '{active_project_name}' synced successfully")
+
         # Auto-sync project instructions if enabled
         if config.get('auto_sync_instructions', True):
             instructions = ProjectInstructions(local_path)
             if instructions.is_enabled() and os.path.exists(os.path.join(local_path, instructions.INSTRUCTIONS_FILE)):
                 click.echo("\nSyncing project instructions...")
                 if instructions.push_instructions(provider, active_organization_id, active_project_id):
-                    click.echo("✓ Project instructions synced")
+                    click.echo("\u2713 Project instructions synced")
 
         # Always sync submodules to their respective projects
         for submodule in submodules:
             sync_submodule(provider, config, submodule, category)
 
-# Add pull command to sync group
-sync_group.add_command(pull_module, name="pull")
-
 # Helper function for submodule syncing
 def sync_submodule(provider, config, submodule, category):
     submodule_path = Path(config.get_local_path()) / submodule["relative_path"]
-    submodule_files = get_local_files(config, str(submodule_path), category)
+    submodule_files = utils.get_local_files(config, str(submodule_path), category)
+    submodule_files = _filter_existing_files(submodule_files, str(submodule_path))
     remote_submodule_files = provider.list_files(
         submodule["active_organization_id"], submodule["active_project_id"]
     )
@@ -250,7 +265,10 @@ def sync_submodule(provider, config, submodule, category):
         f"https://claude.ai/project/{submodule['active_project_id']}"
     )
 
+cli.add_command(pull_command, name="pull")
+
 # ---------- Config Group (using existing config module) ----------
+
 cli.add_command(config_module, name="config")
 
 # ---------- Conflict Group (using existing conflict module) ----------
@@ -416,43 +434,9 @@ def utils_doctor(config):
     click.echo("\n" + "=" * 50)
     click.echo("Diagnostics complete. Fix any ❌ issues for optimal performance.")
 
-# ---------- Top-level legacy commands for backward compatibility ----------
-
-# Legacy push command (hidden from help)
-@cli.command(name="push", hidden=True)
-@click.option("--category", help="Specify the file category to sync")
-@click.option("--uberproject", is_flag=True, help="Include submodules in parent project sync")
-@click.option("--dryrun", is_flag=True, default=False, help="Just show what files would be sent")
-@click.pass_context
-def legacy_push(ctx, category, uberproject, dryrun):
-    """Legacy push command - redirects to sync push."""
-    # Call the sync push command
-    ctx.invoke(sync_push, category=category, uberproject=uberproject, dryrun=dryrun)
-
-# Legacy pull command (hidden from help)  
-@cli.command(name="pull", hidden=True)
-@click.pass_context
-def legacy_pull(ctx, **kwargs):
-    """Legacy pull command - redirects to sync pull."""
-    # Get the pull command from sync group and invoke it
-    sync_grp = cli.commands.get("sync")
-    if sync_grp:
-        pull_cmd = sync_grp.commands.get("pull")
-        if pull_cmd:
-            ctx.invoke(pull_cmd, **kwargs)
-
-# Legacy schedule command (hidden from help)
-@cli.command(name="schedule", hidden=True)
-@click.pass_context
-def legacy_schedule(ctx, **kwargs):
-    """Legacy schedule command - redirects to sync schedule."""
-    sync_grp = cli.commands.get("sync")
-    if sync_grp:
-        schedule_cmd = sync_grp.commands.get("schedule")
-        if schedule_cmd:
-            ctx.invoke(schedule_cmd, **kwargs)
 
 # Legacy upgrade command (top-level)
+
 @cli.command(name="upgrade")
 @click.pass_context
 def legacy_upgrade(ctx):
@@ -499,12 +483,12 @@ def embedding(config, category, uberproject):
 
     if uberproject:
         # Include submodule files in the parent project
-        local_files = get_local_files(
+        local_files = utils.get_local_files(
             config, local_path, category, include_submodules=True
         )
     else:
         # Exclude submodule files from the parent project
-        local_files = get_local_files(
+        local_files = utils.get_local_files(
             config, local_path, category, include_submodules=False
         )
 
