@@ -98,6 +98,12 @@ class ClaudeAIProvider(BaseClaudeAIProvider):
         if e.code == 403:
             error_msg = "Received a 403 Forbidden error."
             raise ProviderError(error_msg)
+        elif e.code == 404:
+            # 404 is expected for some endpoints (e.g., projects without custom instructions)
+            # Log at debug level and raise exception to be handled by caller
+            error_msg = f"API request failed with status code {e.code}: {content_str}"
+            self.logger.debug(error_msg)
+            raise ProviderError(error_msg)
         elif e.code == 429:
             try:
                 error_data = json.loads(content_str)
