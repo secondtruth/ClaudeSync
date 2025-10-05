@@ -142,6 +142,27 @@ class FileConfigManager(BaseConfigManager):
         
         return self.local_config.get(key) or self.global_config.get(key, default)
 
+    def _ensure_local_config_directory(self, key=None, value=None):
+        """Ensure there's a directory available to store local configuration."""
+        if key == "local_path" and value:
+            candidate_dir = Path(value)
+        elif self.local_config_dir:
+            candidate_dir = self.local_config_dir
+        elif self.local_config.get("local_path"):
+            candidate_dir = Path(self.local_config["local_path"])
+        else:
+            candidate_dir = self._find_local_config_dir()
+            if candidate_dir is None:
+                candidate_dir = Path.cwd()
+                if candidate_dir.name == ".claudesync":
+                    candidate_dir = candidate_dir.parent
+
+        self.local_config_dir = candidate_dir
+        if self.local_config_dir:
+            config_dir = self.local_config_dir / ".claudesync"
+            config_dir.mkdir(parents=True, exist_ok=True)
+        return self.local_config_dir
+
     def set(self, key, value, local=False):
         """
         Sets a configuration value and saves the configuration.
@@ -152,13 +173,8 @@ class FileConfigManager(BaseConfigManager):
             local (bool): If True, sets the value in the local configuration. Otherwise, sets it in the global configuration.
         """
         if local:
-            # Update local_config_dir when setting local_path
-            if key == "local_path":
-                self.local_config_dir = Path(value)
-                # Create .claudesync directory in the specified path
-                (self.local_config_dir / ".claudesync").mkdir(exist_ok=True)
-
             self.local_config[key] = value
+            self._ensure_local_config_directory(key, value)
             self._save_local_config()
         else:
             self.global_config[key] = value
@@ -182,7 +198,7 @@ class FileConfigManager(BaseConfigManager):
             local_config_file = (
                 self.local_config_dir / ".claudesync" / "config.local.json"
             )
-            local_config_file.parent.mkdir(exist_ok=True)
+            local_config_file.parent.mkdir(parents=True, exist_ok=True)
             with open(local_config_file, "w", encoding="utf-8") as f:
                 json.dump(self.local_config, f, indent=2, ensure_ascii=False)
 
