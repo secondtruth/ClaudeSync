@@ -25,6 +25,11 @@ class BaseProvider(ABC):
         pass
 
     @abstractmethod
+    def get_file_content(self, organization_id, project_id, file_name):
+        """Retrieve the full content of a specific file from a project."""
+        pass
+
+    @abstractmethod
     def upload_file(self, organization_id, project_id, file_name, content):
         """Upload a file to a specified project within an organization."""
         pass
@@ -107,3 +112,4 @@ class BaseProvider(ABC):
                 - custom string entry
         """
         pass
+

@@ -211,6 +211,14 @@ class BaseClaudeAIProvider(BaseProvider):
             for file in response
         ]
 
+    def get_file_content(self, organization_id, project_id, file_name):
+        """Retrieve the full content of a single project file."""
+        files = self.list_files(organization_id, project_id)
+        for file in files:
+            if file.get("file_name") == file_name:
+                return file.get("content", "")
+        raise ProviderError(f"File '{file_name}' not found in project {project_id}")
+
     def upload_file(self, organization_id, project_id, file_name, content):
         data = {"file_name": file_name, "content": content}
         return self._make_request(
@@ -332,3 +340,4 @@ class BaseClaudeAIProvider(BaseProvider):
                 yield {"error": event.data}
             if event.event == "done":
                 break
+
