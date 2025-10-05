@@ -236,16 +236,20 @@ class BaseClaudeAIProvider(BaseProvider):
         )
 
     def get_project_instructions(self, organization_id, project_id):
-        """Get project system instructions (prompt template)."""
-        return self._make_request(
-            "GET", f"/organizations/{organization_id}/projects/{project_id}/prompt_template"
+        """Get project system instructions (prompt template) from project details."""
+        # Project instructions are now part of the project details
+        project_details = self._make_request(
+            "GET", f"/organizations/{organization_id}/projects/{project_id}"
         )
+        # Return in same format as before for compatibility
+        return {"template": project_details.get("prompt_template", "")}
 
     def update_project_instructions(self, organization_id, project_id, instructions):
         """Update project system instructions (prompt template)."""
-        data = {"template": instructions}
+        # API changed: prompt_template is now part of project update
+        data = {"prompt_template": instructions}
         return self._make_request(
-            "PUT", f"/organizations/{organization_id}/projects/{project_id}/prompt_template", data
+            "PUT", f"/organizations/{organization_id}/projects/{project_id}", data
         )
 
     def get_chat_conversations(self, organization_id):
