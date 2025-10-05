@@ -213,10 +213,8 @@ class WorkspaceSync:
             remote_files = self.provider.list_files(org_id, project_id)
             remote_files = [f for f in remote_files if f['file_name'] != 'AGENTS.md']
 
-            if not remote_files:
-                return "skipped"
-
-            # Create context folder for knowledge files
+            # Create context folder for knowledge files even if remote is empty so
+            # bidirectional sync can reason about local-only changes.
             context_path = folder_path / "context"
             context_path.mkdir(exist_ok=True)
 
@@ -294,29 +292,7 @@ class WorkspaceSync:
             except Exception as e:
                 safe_print(f"    Warning: Could not upload instructions: {e}")
 
-        # Get local files from context folder only
-        local_files = {}
-        context_path = folder_path / "context"
-
-        if context_path.exists():
-            for file_path in context_path.glob("*"):
-                if file_path.is_file():
-                    # Skip special files
-                    if ".claudesync" in str(file_path):
-                        continue
-                    if "chats" in str(file_path):
-                        continue
-
-                    try:
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            content = f.read()
-                        # Use just the filename (not context/filename)
-                        local_files[file_path.name] = {
-                            'content': content,
-                            'hash': compute_md5_hash(content)
-                        }
-                    except Exception:
-                        continue
+        local_files = self._collect_local_files(folder_path)
 
         # Build remote file map and detect duplicates
         from collections import defaultdict
@@ -368,6 +344,47 @@ class WorkspaceSync:
                     self.provider.delete_file(org_id, project_id, remote_file['uuid'])
 
         return stats
+
+    def _collect_local_files(self, folder_path: Path) -> Dict[str, Dict[str, str]]:
+        """Collect local files that should be considered for uploads."""
+        local_files: Dict[str, Dict[str, str]] = {}
+
+        def add_file(file_path: Path):
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception:
+                return
+
+            filename = file_path.name
+            if filename in local_files:
+                return
+
+            local_files[filename] = {
+                'content': content,
+                'hash': compute_md5_hash(content)
+            }
+
+        context_path = folder_path / "context"
+        if context_path.exists():
+            for file_path in context_path.glob("*"):
+                if file_path.is_file():
+                    if ".claudesync" in str(file_path):
+                        continue
+                    if "chats" in str(file_path):
+                        continue
+                    add_file(file_path)
+
+        for file_path in folder_path.glob("*"):
+            if not file_path.is_file():
+                continue
+            if file_path.name == "AGENTS.md":
+                continue
+            if file_path.name.startswith('.'):
+                continue
+            add_file(file_path)
+
+        return local_files
 
     def _resolve_conflict(self, strategy: str, local_data: dict, remote_file: dict) -> bool:
         """
