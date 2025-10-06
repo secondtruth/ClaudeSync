@@ -22,7 +22,7 @@ from claudesync.syncmanager import SyncManager
 
 # Import existing command modules
 from .auth import auth as auth_module
-from .organization import organization as org_module  
+from .organization import organization as org_module
 from .project import project as project_module
 from .sync import sync as sync_module, schedule as schedule_module
 from .config import config as config_module

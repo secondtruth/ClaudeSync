@@ -34,8 +34,8 @@ def _print_plan(plan):
 @click.option("--dry-run", is_flag=True, help="Preview changes without syncing")
 @click.option("--no-pull", is_flag=True, help="Skip pulling remote changes (upload only)")
 @click.option("--no-push", is_flag=True, help="Skip pushing local changes (download only)")
-@click.option("--category", help="Specify the file category to sync")
-@click.option("--uberproject", is_flag=True, help="Include submodules in parent project sync")
+@click.option("--category", default=None, help="Specify the file category to sync")
+@click.option("--uberproject", is_flag=True, default=False, help="Include submodules in parent project sync")
 @click.pass_obj
 @handle_errors
 def sync(config, conflict_strategy, dry_run, no_pull, no_push, category, uberproject):

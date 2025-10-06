@@ -204,7 +204,7 @@ class SyncManager:
     
     def execute_plan(self, plan: SyncPlan, progress_callback=None, cancel_check=None) -> dict:
         """Execute the sync plan with progress reporting.
-        
+
         Args:
             plan: The sync plan to execute
             progress_callback: Optional callback(current, total, message)
@@ -220,11 +220,11 @@ class SyncManager:
             "errors": [],
             "cancelled": False
         }
-        
+
         total = plan.total_operations
         if not total:
             return results
-        
+
         current = 0
         with tqdm(total=total, desc="Syncing", unit="file", disable=progress_callback is not None) as pbar:
             for item in plan.actions:
@@ -234,11 +234,11 @@ class SyncManager:
                     if progress_callback:
                         progress_callback(current, total, "Cancelled")
                     break
-                
+
                 try:
                     if progress_callback:
                         progress_callback(current, total, f"Processing {item.path}")
-                    
+
                     if item.action == "upload":
                         self._upload_file(item.path)
                         results["uploaded"] += 1
@@ -248,16 +248,16 @@ class SyncManager:
                     elif item.action == "delete_remote":
                         self._delete_remote_file(item.path)
                         results["deleted"] += 1
-                    
+
                     current += 1
                     if not progress_callback:
                         pbar.update(1)
                     time.sleep(self.upload_delay)  # Rate limiting
-                    
+
                 except Exception as e:
                     results["errors"].append(f"{item.path}: {str(e)}")
                     logger.error(f"Error processing {item.path}: {e}")
-        
+
         if progress_callback and not results["cancelled"]:
             progress_callback(total, total, "Complete")
         

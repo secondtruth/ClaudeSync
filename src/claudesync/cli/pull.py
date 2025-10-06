@@ -21,5 +21,7 @@ def pull(ctx, local_path, dry_run, force, merge):
         conflict_strategy=conflict_strategy,
         dry_run=dry_run,
         no_pull=False,
-        no_push=True
+        no_push=True,
+        category=None,
+        uberproject=False
     )

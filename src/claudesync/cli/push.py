@@ -1,8 +1,8 @@
 import click
 
 @click.command()
-@click.option('--category', help='Specify the file category to sync')
-@click.option('--uberproject', is_flag=True, help='Include submodules in parent project sync')
+@click.option('--category', default=None, help='Specify the file category to sync')
+@click.option('--uberproject', is_flag=True, default=False, help='Include submodules in parent project sync')
 @click.option('--dryrun', is_flag=True, default=False, help='Just show what files would be sent')
 @click.pass_context
 def push(ctx, category, uberproject, dryrun):
