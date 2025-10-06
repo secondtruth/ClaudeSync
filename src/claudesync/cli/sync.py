@@ -98,7 +98,7 @@ def sync(config, conflict_strategy, dry_run, no_pull, no_push, category, uberpro
     
     # Execute plan
     if plan.total_operations > 0:
-        results = sync_manager.execute_plan(plan)
+        results = sync_manager.execute_plan(plan, direction=direction)
         
         # Print results
         click.echo("\n✅ Sync Complete:")

@@ -16,6 +16,7 @@ from claudesync.exceptions import ProviderError
 from .compression import compress_content, decompress_content
 from .conflict_resolver import ConflictResolver
 from .project_instructions import ProjectInstructions
+from .metadatamanager import MetadataManager
 
 logger = logging.getLogger(__name__)
 INSTRUCTIONS_FILE = ProjectInstructions.INSTRUCTIONS_FILE
@@ -92,7 +93,8 @@ class SyncManager:
         self.retry_delay = 1
         self.compression_algorithm = config.get("compression_algorithm", "none")
         self.synced_files = {}
-    
+        self.metadata_manager = MetadataManager(local_path, config=config)
+
     def build_plan(
         self,
         *,
@@ -202,14 +204,15 @@ class SyncManager:
         
         return plan
     
-    def execute_plan(self, plan: SyncPlan, progress_callback=None, cancel_check=None) -> dict:
+    def execute_plan(self, plan: SyncPlan, progress_callback=None, cancel_check=None, direction: SyncDirection = None) -> dict:
         """Execute the sync plan with progress reporting.
 
         Args:
             plan: The sync plan to execute
             progress_callback: Optional callback(current, total, message)
             cancel_check: Optional callable that returns True to cancel
-        
+            direction: Sync direction for metadata tracking
+
         Returns:
             Dictionary with results
         """
@@ -260,7 +263,17 @@ class SyncManager:
 
         if progress_callback and not results["cancelled"]:
             progress_callback(total, total, "Complete")
-        
+
+        # Record sync metadata
+        if direction and (results["uploaded"] > 0 or results["downloaded"] > 0 or results["deleted"] > 0):
+            total_files = results["uploaded"] + results["downloaded"] + results["deleted"]
+            status = "success" if not results["errors"] else "partial" if total_files > 0 else "failed"
+            self.metadata_manager.record_sync(
+                direction=direction.value if isinstance(direction, SyncDirection) else direction,
+                files_synced=total_files,
+                status=status
+            )
+
         return results
     
     def _upload_file(self, file_path):
