@@ -31,6 +31,7 @@ from .chat import chat as chat_module
 from .watch import watch as watch_module
 from .workspace import workspace as workspace_module
 from .pull import pull as pull_command
+from .status import status as status_command
 
 # Setup logging
 logging.basicConfig(
@@ -282,6 +283,9 @@ cli.add_command(workspace_module, name="workspace")
 
 # ---------- Watch Group (using existing watch module) ----------
 cli.add_command(watch_module, name="watch")
+
+# ---------- Status Command ----------
+cli.add_command(status_command, name="status")
 
 # ---------- GUI Group ----------
 @cli.group(cls=AliasedGroup, aliases=COMMON_ALIASES, name="gui")
